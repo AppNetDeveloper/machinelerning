@@ -23,10 +23,15 @@ class CameraManager:
 
     def scan_usb_cameras(self) -> list[dict]:
         """Escanea camaras USB conectadas al servidor."""
+        # Liberar capturas activas antes de escanear
+        self.release_all()
         found = []
         for index in range(5):
             cap = cv2.VideoCapture(index)
             if cap.isOpened():
+                # Forzar formato MJPEG para obtener color
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                time.sleep(0.2)
                 ret, frame = cap.read()
                 if ret and frame is not None:
                     cam_id = f"usb_{index}"
@@ -37,7 +42,6 @@ class CameraManager:
                         "name": f"Camara USB {index}",
                         "resolution": f"{int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}",
                     }
-                    # Actualizar o anadir
                     self.cameras[cam_id] = cam_info
                     found.append(cam_info)
                 cap.release()
@@ -87,6 +91,11 @@ class CameraManager:
 
             cap = cv2.VideoCapture(cam["source"])
             if cap.isOpened():
+                # Forzar formato MJPEG (color) en lugar de YUYV/YUV (gris)
+                if cam["type"] == "usb":
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                    # Pequeña pausa para que el driver aplique el formato
+                    time.sleep(0.2)
                 self._active_captures[cam_id] = cap
                 return cap
             return None
@@ -115,6 +124,18 @@ class CameraManager:
         if not ret or frame is None:
             self.release_capture(cam_id)
             return None, "Error leyendo frame"
+
+        # Corregir frames en escala de grises (2 canales o 3 canales iguales)
+        if len(frame.shape) == 2:
+            # Frame monocanal -> convertir a BGR
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        elif len(frame.shape) == 3 and frame.shape[2] == 1:
+            # Frame con 1 canal expandido
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        elif len(frame.shape) == 3 and frame.shape[2] == 4:
+            # Frame BGRA -> BGR
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
         return frame, None
 
     def capture_and_save(self, cam_id: str, class_name: str) -> dict:
@@ -139,6 +160,44 @@ class CameraManager:
             "path": str(filepath),
             "resolution": f"{frame.shape[1]}x{frame.shape[0]}",
         }
+
+    def scan_qr(self, cam_id: str) -> list[dict]:
+        """Escanea el frame actual en busca de codigos QR y barras."""
+        frame, error = self.get_frame(cam_id)
+        if error:
+            return []
+
+        results = []
+
+        # QR codes
+        try:
+            qr = cv2.QRCodeDetector()
+            retval, decoded_info, points, _ = qr.detectAndDecodeMulti(frame)
+            if retval and decoded_info:
+                for i, text in enumerate(decoded_info):
+                    if text:
+                        pts = points[i].tolist() if points is not None and i < len(points) else []
+                        results.append({"type": "QR", "data": text})
+        except Exception:
+            # Fallback: single QR detection
+            try:
+                qr = cv2.QRCodeDetector()
+                decoded, points, _ = qr.detectAndDecode(frame)
+                if decoded:
+                    results.append({"type": "QR", "data": decoded})
+            except Exception:
+                pass
+
+        # Barcodes (1D) - EAN, UPC, Code128, etc.
+        try:
+            barcode = cv2.barcode_BarcodeDetector()
+            decoded, points, _ = barcode.detectAndDecode(frame)
+            if decoded:
+                results.append({"type": "BARCODE", "data": decoded})
+        except Exception:
+            pass
+
+        return results
 
     def get_frame_jpeg(self, cam_id: str, quality: int = 70) -> bytes | None:
         """Captura un frame y lo retorna como bytes JPEG (para streaming)."""

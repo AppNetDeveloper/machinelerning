@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+{% block title %}Camara - Confecciones{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Captura con Camara</h2>
+    <p>Usa camaras USB o IP para tomar fotos directamente al dataset</p>
+</div>
+
+{% if request.query_params.get('success') %}
+<div class="alert alert-success alert-dismissible fade show">
+    <i class="bi bi-check-circle"></i> {{ request.query_params.get('success') }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if request.query_params.get('error') %}
+<div class="alert alert-danger alert-dismissible fade show">
+    <i class="bi bi-exclamation-triangle"></i> {{ request.query_params.get('error') }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="row g-4">
+    <!-- Panel izquierdo: camaras y controles -->
+    <div class="col-md-4">
+        <!-- Camaras USB -->
+        <div class="card mb-4">
+            <div class="card-header"><i class="bi bi-usb-symbol"></i> Camaras USB</div>
+            <div class="card-body">
+                <button class="btn btn-outline-light w-100 mb-3" id="scanBtn" onclick="scanCameras()">
+                    <i class="bi bi-search"></i> Escanear camaras USB
+                </button>
+                <div id="usbResults" class="small"></div>
+            </div>
+        </div>
+
+        <!-- Camara IP -->
+        <div class="card mb-4">
+            <div class="card-header"><i class="bi bi-wifi"></i> Anadir Camara IP</div>
+            <div class="card-body">
+                <form method="POST" action="/camera/add-ip">
+                    <div class="mb-3">
+                        <label class="form-label">Nombre</label>
+                        <input type="text" name="name" class="form-control" 
+                               placeholder="ej: Camara Almacen" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Protocolo</label>
+                        <select class="form-select" id="protocolSelect" onchange="updateUrlHint()">
+                            <option value="rtsp">RTSP</option>
+                            <option value="http">HTTP (MJPEG)</option>
+                            <option value="https">HTTPS (MJPEG)</option>
+                            <option value="custom">URL personalizada</option>
+                        </select>
+                    </div>
+                    <div class="mb-3" id="ipFields">
+                        <label class="form-label">IP / Host</label>
+                        <input type="text" class="form-control" id="ipInput" 
+                               placeholder="192.168.1.100">
+                    </div>
+                    <div class="mb-3" id="portFields">
+                        <label class="form-label">Puerto</label>
+                        <input type="text" class="form-control" id="portInput" 
+                               placeholder="554">
+                    </div>
+                    <div class="mb-3" id="pathFields">
+                        <label class="form-label">Ruta / Stream</label>
+                        <input type="text" class="form-control" id="pathInput" 
+                               placeholder="/stream">
+                    </div>
+                    <div class="mb-3" id="userFields">
+                        <label class="form-label">Usuario (opcional)</label>
+                        <input type="text" class="form-control" id="userInput" 
+                               placeholder="admin">
+                    </div>
+                    <div class="mb-3" id="passFields">
+                        <label class="form-label">Password (opcional)</label>
+                        <input type="password" class="form-control" id="passInput" 
+                               placeholder="password">
+                    </div>
+                    <div class="mb-3" id="customUrlField" style="display:none;">
+                        <label class="form-label">URL completa</label>
+                        <input type="text" name="url" class="form-control" id="customUrlInput"
+                               placeholder="rtsp://user:pass@192.168.1.100:554/stream">
+                    </div>
+                    <input type="hidden" name="url" id="finalUrl">
+                    <button type="submit" class="btn btn-accent w-100" onclick="buildUrl()">
+                        <i class="bi bi-plus-circle"></i> Conectar Camara
+                    </button>
+                </form>
+                <div class="mt-2 small text-muted">
+                    <i class="bi bi-info-circle"></i> Formatos soportados:<br>
+                    RTSP, HTTP/HTTPS MJPEG, RTSP con autenticacion
+                </div>
+            </div>
+        </div>
+
+        <!-- Camaras registradas -->
+        <div class="card">
+            <div class="card-header"><i class="bi bi-camera-video"></i> Camaras Conectadas</div>
+            <div class="card-body">
+                {% if cameras %}
+                <div class="list-group list-group-flush">
+                    {% for cam in cameras %}
+                    <div class="list-group-item bg-transparent d-flex justify-content-between align-items-center px-0"
+                         style="border-color: rgba(255,255,255,0.1);">
+                        <div>
+                            <strong>{{ cam.name }}</strong><br>
+                            <small class="text-muted">{{ cam.type|upper }} | {{ cam.resolution }}</small>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-sm btn-outline-light" 
+                                    onclick="selectCamera('{{ cam.id }}', '{{ cam.name }}')">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                            <form method="POST" action="/camera/remove" style="display:inline;">
+                                <input type="hidden" name="camera_id" value="{{ cam.id }}">
+                                <button type="submit" class="btn btn-sm btn-outline-danger"
+                                        onclick="return confirm('Eliminar camara?')">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted mb-0">Sin camaras conectadas. Escanea USB o anade IP.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Panel derecho: preview y captura -->
+    <div class="col-md-8">
+        <!-- Preview -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between">
+                <span><i class="bi bi-camera-video"></i> Vista Previa</span>
+                <span id="camLabel" class="badge bg-secondary">Sin camara</span>
+            </div>
+            <div class="card-body text-center p-0" style="background: #000; min-height: 360px; position: relative;">
+                <img id="previewImg" src="" alt="Preview" 
+                     style="max-width: 100%; max-height: 480px; display: none;">
+                <div id="noCameraMsg" class="py-5" style="color: var(--text-muted);">
+                    <i class="bi bi-camera-video-off" style="font-size: 3rem;"></i>
+                    <p class="mt-2">Selecciona una camara para ver la vista previa</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Captura -->
+        <div class="card">
+            <div class="card-header"><i class="bi bi-camera"></i> Capturar Foto</div>
+            <div class="card-body">
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-5">
+                        <label class="form-label">Guardar en clase</label>
+                        <select id="captureClass" class="form-select">
+                            {% for class_name in dataset_stats.keys() %}
+                            <option value="{{ class_name }}">{{ class_name }} ({{ dataset_stats[class_name] }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <button class="btn btn-accent w-100 py-3" id="captureBtn" onclick="capturePhoto()" disabled>
+                            <i class="bi bi-camera-fill"></i> CAPTURAR AHORA
+                        </button>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-outline-light w-100" onclick="takeSnapshot()" id="snapshotBtn" disabled>
+                            <i class="bi bi-image"></i> Ver frame
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Resultado de captura -->
+                <div id="captureResult" class="mt-3" style="display: none;">
+                    <div class="alert alert-success">
+                        <i class="bi bi-check-circle"></i>
+                        <span id="captureMsg"></span>
+                    </div>
+                </div>
+
+                <!-- Historial de capturas -->
+                <div class="mt-3">
+                    <h6>Fotos capturadas esta sesion:</h6>
+                    <div id="captureHistory" class="d-flex gap-2 flex-wrap">
+                        <small class="text-muted">Ninguna aun</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentCamera = null;
+let streaming = false;
+let streamInterval = null;
+let captureCount = 0;
+
+// Protocol hints
+function updateUrlHint() {
+    const proto = document.getElementById('protocolSelect').value;
+    const portInput = document.getElementById('portInput');
+    const pathInput = document.getElementById('pathInput');
+    const customField = document.getElementById('customUrlField');
+    const ipFields = document.getElementById('ipFields');
+    const portFields = document.getElementById('portFields');
+    const pathFields = document.getElementById('pathFields');
+    const userFields = document.getElementById('userFields');
+    const passFields = document.getElementById('passFields');
+
+    if (proto === 'custom') {
+        customField.style.display = 'block';
+        ipFields.style.display = 'none';
+        portFields.style.display = 'none';
+        pathFields.style.display = 'none';
+        userFields.style.display = 'none';
+        passFields.style.display = 'none';
+    } else {
+        customField.style.display = 'none';
+        ipFields.style.display = 'block';
+        portFields.style.display = 'block';
+        pathFields.style.display = 'block';
+        userFields.style.display = 'block';
+        passFields.style.display = 'block';
+
+        if (proto === 'rtsp') {
+            portInput.placeholder = '554';
+            pathInput.placeholder = '/stream1';
+        } else if (proto === 'http') {
+            portInput.placeholder = '80';
+            pathInput.placeholder = '/video.mjpg';
+        } else if (proto === 'https') {
+            portInput.placeholder = '443';
+            pathInput.placeholder = '/video.mjpg';
+        }
+    }
+}
+
+function buildUrl() {
+    const proto = document.getElementById('protocolSelect').value;
+    if (proto === 'custom') {
+        document.getElementById('finalUrl').value = document.getElementById('customUrlInput').value;
+        return;
+    }
+
+    const ip = document.getElementById('ipInput').value.trim();
+    const port = document.getElementById('portInput').value.trim();
+    const path = document.getElementById('pathInput').value.trim();
+    const user = document.getElementById('userInput').value.trim();
+    const pass = document.getElementById('passInput').value.trim();
+
+    let url = proto + '://';
+    if (user) {
+        url += user;
+        if (pass) url += ':' + pass;
+        url += '@';
+    }
+    url += ip;
+    if (port) url += ':' + port;
+    if (path) url += path;
+
+    document.getElementById('finalUrl').value = url;
+}
+
+// Scan USB cameras
+async function scanCameras() {
+    const btn = document.getElementById('scanBtn');
+    const results = document.getElementById('usbResults');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Escaneando...';
+    results.innerHTML = '';
+
+    try {
+        const res = await fetch('/camera/scan', { method: 'POST' });
+        const data = await res.json();
+
+        if (data.total === 0) {
+            results.innerHTML = '<p class="text-muted">No se encontraron camaras USB</p>';
+        } else {
+            data.cameras.forEach(cam => {
+                const div = document.createElement('div');
+                div.className = 'd-flex justify-content-between align-items-center py-2 border-bottom';
+                div.style.borderColor = 'rgba(255,255,255,0.1)';
+                div.innerHTML = '<span><strong>' + cam.name + '</strong> <small class="text-muted">(' + cam.resolution + ')</small></span>' +
+                    '<button class="btn btn-sm btn-outline-light" onclick="selectCamera(\'' + cam.id + '\', \'' + cam.name + '\')"><i class="bi bi-eye"></i> Usar</button>';
+                results.appendChild(div);
+            });
+        }
+    } catch (err) {
+        results.innerHTML = '<p class="text-danger">Error: ' + err.message + '</p>';
+    }
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-search"></i> Escanear camaras USB';
+}
+
+// Select camera for preview
+function selectCamera(camId, camName) {
+    currentCamera = camId;
+    const img = document.getElementById('previewImg');
+    const noMsg = document.getElementById('noCameraMsg');
+    const label = document.getElementById('camLabel');
+    const captureBtn = document.getElementById('captureBtn');
+    const snapshotBtn = document.getElementById('snapshotBtn');
+
+    label.textContent = camName;
+    label.className = 'badge bg-success';
+    noMsg.style.display = 'none';
+    img.style.display = 'block';
+    captureBtn.disabled = false;
+    snapshotBtn.disabled = false;
+
+    // Start MJPEG stream
+    if (streamInterval) clearInterval(streamInterval);
+    img.src = '/camera/stream/' + camId;
+    streaming = true;
+}
+
+// Capture photo
+async function capturePhoto() {
+    if (!currentCamera) return;
+    const className = document.getElementById('captureClass').value;
+    const btn = document.getElementById('captureBtn');
+
+    btn.disabled = true;
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Capturando...';
+
+    const formData = new FormData();
+    formData.append('camera_id', currentCamera);
+    formData.append('class_name', className);
+
+    try {
+        const res = await fetch('/camera/capture', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        if (data.success) {
+            captureCount++;
+            const resultDiv = document.getElementById('captureResult');
+            const msgSpan = document.getElementById('captureMsg');
+            msgSpan.textContent = 'Foto guardada: ' + data.filename + ' en ' + data.class + ' (' + data.resolution + ')';
+            resultDiv.style.display = 'block';
+            setTimeout(() => resultDiv.style.display = 'none', 4000);
+
+            // Add to history
+            const history = document.getElementById('captureHistory');
+            if (captureCount === 1) history.innerHTML = '';
+            const badge = document.createElement('span');
+            badge.className = 'badge bg-dark px-2 py-1';
+            badge.textContent = data.filename;
+            history.appendChild(badge);
+        } else {
+            alert('Error: ' + (data.error || 'Error desconocido'));
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-camera-fill"></i> CAPTURAR AHORA';
+}
+
+// Take single snapshot
+function takeSnapshot() {
+    if (!currentCamera) return;
+    window.open('/camera/snapshot/' + currentCamera, '_blank');
+}
+
+updateUrlHint();
+</script>
+{% endblock %}

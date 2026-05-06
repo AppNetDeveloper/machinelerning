@@ -56,6 +56,14 @@ async def init_db():
                 probabilities_json TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS qr_scans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_type TEXT,
+                data TEXT NOT NULL,
+                camera_id TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # Crear admin si no existe
@@ -227,3 +235,24 @@ async def get_dataset_stats() -> dict:
                           if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp')]
                 stats[class_dir.name] = len(images)
     return stats
+
+
+async def save_qr_scan(scan_type: str, data: str, camera_id: str = None):
+    """Guarda un escaneo QR/barcode en el historial."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute(
+            "INSERT INTO qr_scans (scan_type, data, camera_id) VALUES (?, ?, ?)",
+            (scan_type, data, camera_id)
+        )
+        await db.commit()
+
+
+async def get_qr_scans(limit: int = 100) -> list[dict]:
+    """Obtiene el historial de escaneos QR/barcode."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM qr_scans ORDER BY created_at DESC LIMIT ?", (limit,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]

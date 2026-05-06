@@ -32,9 +32,11 @@ from database import (
     init_db, save_training_run, get_training_runs, get_training_run,
     save_prediction, get_predictions, get_dataset_stats,
     get_all_users, add_user, change_password, delete_user,
+    save_qr_scan, get_qr_scans,
 )
 from auth import authenticate, get_current_user, require_auth
 from ml_model import model_manager
+from camera import camera_manager
 
 
 # ─── Estado global del entrenamiento ─────────────────────────────
@@ -58,6 +60,7 @@ async def lifespan(app: FastAPI):
     else:
         print("Sin modelo entrenado. Ve a Entrenar para crear uno.")
     yield
+    camera_manager.release_all()
 
 
 app = FastAPI(
@@ -536,6 +539,148 @@ async def settings_save_server(request: Request):
         f"/settings?success=Configuracion+guardada.+Reinicia+el+servidor+para+aplicar+(puerto={new_port},+host={new_host})",
         status_code=303
     )
+
+
+# ─── Camaras ─────────────────────────────────────────────────────
+@app.get("/camera", response_class=HTMLResponse)
+async def camera_page(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    dataset_stats = await get_dataset_stats()
+    cameras = camera_manager.list_cameras()
+    return templates.TemplateResponse(request, "camera.html", {
+        "request": request,
+        "user": user,
+        "cameras": cameras,
+        "dataset_stats": dataset_stats,
+    })
+
+
+@app.post("/camera/scan")
+async def camera_scan(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return JSONResponse({"error": "No autorizado"}, status_code=401)
+
+    found = camera_manager.scan_usb_cameras()
+    return JSONResponse({"cameras": found, "total": len(found)})
+
+
+@app.post("/camera/add-ip")
+async def camera_add_ip(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    form = await request.form()
+    name = form.get("name", "").strip()
+    url = form.get("url", "").strip()
+
+    if not name or not url:
+        return RedirectResponse("/camera?error=Nombre+y+URL+requeridos", status_code=303)
+
+    result = camera_manager.add_ip_camera(name, url)
+    if "error" in result:
+        return RedirectResponse(f"/camera?error={result['error']}", status_code=303)
+
+    return RedirectResponse(f"/camera?success=Camara+{name}+anadida", status_code=303)
+
+
+@app.post("/camera/remove")
+async def camera_remove(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return JSONResponse({"error": "No autorizado"}, status_code=401)
+
+    form = await request.form()
+    cam_id = form.get("camera_id", "")
+    camera_manager.remove_camera(cam_id)
+    return RedirectResponse("/camera?success=Camara+eliminada", status_code=303)
+
+
+@app.get("/camera/stream/{camera_id}")
+async def camera_stream(camera_id: str):
+    """MJPEG streaming de la camara en tiempo real."""
+    import asyncio
+    from fastapi.responses import StreamingResponse
+
+    async def generate():
+        while True:
+            frame_bytes = camera_manager.get_frame_jpeg(camera_id, quality=60)
+            if frame_bytes is None:
+                break
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            await asyncio.sleep(0.05)  # ~20 FPS
+
+    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.post("/camera/capture")
+async def camera_capture(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return JSONResponse({"error": "No autorizado"}, status_code=401)
+
+    form = await request.form()
+    cam_id = form.get("camera_id", "")
+    class_name = form.get("class_name", "")
+
+    if not cam_id or not class_name:
+        return JSONResponse({"error": "Camara y clase requeridas"}, status_code=400)
+
+    result = camera_manager.capture_and_save(cam_id, class_name)
+    return JSONResponse(result)
+
+
+@app.get("/camera/snapshot/{camera_id}")
+async def camera_snapshot(camera_id: str):
+    """Captura un solo frame como imagen JPEG."""
+    from fastapi.responses import Response
+    frame_bytes = camera_manager.get_frame_jpeg(camera_id, quality=90)
+    if frame_bytes is None:
+        return Response(status_code=503, content="Camara no disponible")
+    return Response(content=frame_bytes, media_type="image/jpeg")
+
+
+# ─── Escaner QR ─────────────────────────────────────────────────
+@app.get("/qr", response_class=HTMLResponse)
+async def qr_page(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    cameras = camera_manager.list_cameras()
+    history = await get_qr_scans(limit=50)
+    return templates.TemplateResponse(request, "qr.html", {
+        "request": request,
+        "user": user,
+        "cameras": cameras,
+        "history": history,
+    })
+
+
+@app.post("/qr/scan")
+async def qr_scan(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return JSONResponse({"error": "No autenticado"}, status_code=401)
+
+    data = await request.json()
+    camera_id = data.get("camera_id", "")
+
+    if not camera_id:
+        return JSONResponse({"error": "camera_id requerido"}, status_code=400)
+
+    results = camera_manager.scan_qr(camera_id)
+
+    # Guardar en historial
+    for r in results:
+        await save_qr_scan(r["type"], r["data"], camera_id)
+
+    return JSONResponse({"results": results, "count": len(results)})
 
 
 # ─── API REST (para uso programatico) ───────────────────────────

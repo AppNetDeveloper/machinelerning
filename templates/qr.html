@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+
+{% block title %}Escaner QR - Confecciones{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-qr-code"></i> Escaner QR / Barras</h2>
+    <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" id="autoScan" checked>
+        <label class="form-check-label" for="autoScan">Auto-escanear</label>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Left: Camera + Preview -->
+    <div class="col-md-5">
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-camera"></i> Camara</div>
+            <div class="card-body">
+                <select id="cameraSelect" class="form-select mb-3">
+                    <option value="">-- Seleccionar camara --</option>
+                    {% for cam in cameras %}
+                    <option value="{{ cam.id }}">{{ cam.name }} ({{ cam.resolution }})</option>
+                    {% endfor %}
+                </select>
+
+                {% if not cameras %}
+                <div class="alert alert-warning">
+                    No hay camaras disponibles. <a href="/camera">Configurar camaras</a>
+                </div>
+                {% endif %}
+
+                <div class="text-center">
+                    <img id="preview" src="" alt="Preview"
+                         style="max-width:100%; border-radius:8px; display:none; background:#000;">
+                    <div id="noPreview" class="text-muted py-5">
+                        <i class="bi bi-camera-video" style="font-size:3rem;"></i>
+                        <p>Selecciona una camara para ver el preview</p>
+                    </div>
+                </div>
+
+                <div class="d-grid gap-2 mt-3">
+                    <button id="btnScan" class="btn btn-accent" onclick="scanNow()" disabled>
+                        <i class="bi bi-upc-scan"></i> Escanear Ahora
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scan counter -->
+        <div class="card">
+            <div class="card-body text-center">
+                <span class="text-muted">Escaneos esta sesion:</span>
+                <span id="scanCount" class="fw-bold fs-4" style="color:var(--accent);">0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right: Results -->
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between">
+                <span><i class="bi bi-list-check"></i> Resultados</span>
+                <button class="btn btn-sm btn-outline-light" onclick="clearResults()">
+                    <i class="bi bi-trash"></i> Limpiar
+                </button>
+            </div>
+            <div class="card-body" style="max-height:500px; overflow-y:auto;">
+                <div id="noResults" class="text-muted text-center py-4">
+                    <i class="bi bi-qr-code-scan" style="font-size:2.5rem;"></i>
+                    <p>Apunta la camara a un codigo QR o de barras</p>
+                </div>
+                <div id="resultsList"></div>
+            </div>
+        </div>
+
+        <!-- History from DB -->
+        {% if history %}
+        <div class="card mt-3">
+            <div class="card-header"><i class="bi bi-clock-history"></i> Historial reciente</div>
+            <div class="card-body" style="max-height:250px; overflow-y:auto;">
+                {% for h in history %}
+                <div class="d-flex justify-content-between align-items-center border-bottom border-secondary py-1">
+                    <div>
+                        <span class="badge bg-info me-1">{{ h.scan_type }}</span>
+                        <code class="text-light">{{ h.data }}</code>
+                    </div>
+                    <small class="text-muted">{{ h.created_at }}</small>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let selectedCamera = '';
+let autoScanInterval = null;
+let scanCount = 0;
+let seenCodes = new Set();
+
+const cameraSelect = document.getElementById('cameraSelect');
+const preview = document.getElementById('preview');
+const noPreview = document.getElementById('noPreview');
+const btnScan = document.getElementById('btnScan');
+const autoScanToggle = document.getElementById('autoScan');
+
+cameraSelect.addEventListener('change', function() {
+    selectedCamera = this.value;
+    if (selectedCamera) {
+        preview.src = '/camera/stream/' + selectedCamera;
+        preview.style.display = 'block';
+        noPreview.style.display = 'none';
+        btnScan.disabled = false;
+    } else {
+        preview.src = '';
+        preview.style.display = 'none';
+        noPreview.style.display = 'block';
+        btnScan.disabled = true;
+    }
+    manageAutoScan();
+});
+
+autoScanToggle.addEventListener('change', function() {
+    manageAutoScan();
+});
+
+function manageAutoScan() {
+    if (autoScanInterval) {
+        clearInterval(autoScanInterval);
+        autoScanInterval = null;
+    }
+    if (selectedCamera && autoScanToggle.checked) {
+        autoScanInterval = setInterval(scanNow, 800);
+    }
+}
+
+async function scanNow() {
+    if (!selectedCamera) return;
+
+    try {
+        const resp = await fetch('/qr/scan', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({camera_id: selectedCamera})
+        });
+        const data = await resp.json();
+
+        if (data.results && data.results.length > 0) {
+            for (const r of data.results) {
+                addResult(r.type, r.data);
+            }
+        }
+    } catch (e) {
+        console.error('Scan error:', e);
+    }
+}
+
+function addResult(type, data) {
+    const key = type + ':' + data;
+    const isNew = !seenCodes.has(key);
+    seenCodes.add(key);
+
+    scanCount++;
+    document.getElementById('scanCount').textContent = scanCount;
+
+    const noResults = document.getElementById('noResults');
+    noResults.style.display = 'none';
+
+    const list = document.getElementById('resultsList');
+    const now = new Date().toLocaleTimeString();
+
+    const div = document.createElement('div');
+    div.className = 'd-flex justify-content-between align-items-start border-bottom border-secondary py-2';
+    if (isNew) {
+        div.style.background = 'rgba(233, 69, 96, 0.1)';
+        div.style.borderLeft = '3px solid var(--accent)';
+    } else {
+        div.style.opacity = '0.6';
+    }
+
+    const info = document.createElement('div');
+    info.className = 'flex-grow-1 me-2';
+
+    const badge = document.createElement('span');
+    badge.className = 'badge me-2';
+    badge.className += type === 'QR' ? ' bg-primary' : ' bg-success';
+    badge.textContent = type;
+
+    const code = document.createElement('code');
+    code.className = 'text-light';
+    code.style.wordBreak = 'break-all';
+    code.textContent = data;
+
+    info.appendChild(badge);
+    info.appendChild(code);
+
+    const actions = document.createElement('div');
+    actions.className = 'd-flex align-items-center gap-2';
+
+    const time = document.createElement('small');
+    time.className = 'text-muted';
+    time.textContent = now;
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn btn-sm btn-outline-light';
+    copyBtn.title = 'Copiar';
+    const copyIcon = document.createElement('i');
+    copyIcon.className = 'bi bi-clipboard';
+    copyBtn.appendChild(copyIcon);
+    copyBtn.onclick = function() {
+        navigator.clipboard.writeText(data).then(function() {
+            copyIcon.className = 'bi bi-check';
+            setTimeout(function() { copyIcon.className = 'bi bi-clipboard'; }, 1500);
+        });
+    };
+
+    actions.appendChild(time);
+    actions.appendChild(copyBtn);
+
+    div.appendChild(info);
+    div.appendChild(actions);
+
+    list.insertBefore(div, list.firstChild);
+}
+
+function clearResults() {
+    document.getElementById('resultsList').textContent = '';
+    document.getElementById('noResults').style.display = 'block';
+    document.getElementById('scanCount').textContent = '0';
+    scanCount = 0;
+    seenCodes.clear();
+}
+
+// Auto-select first camera if available
+{% if cameras %}
+cameraSelect.value = '{{ cameras[0].id }}';
+cameraSelect.dispatchEvent(new Event('change'));
+{% endif %}
+</script>
+{% endblock %}

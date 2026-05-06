@@ -25,6 +25,14 @@
             <span class="icon"><i class="bi bi-images"></i></span>
             Dataset
         </a>
+        <a href="/camera" class="nav-link {% if request.url.path == '/camera' %}active{% endif %}">
+            <span class="icon"><i class="bi bi-camera"></i></span>
+            Camara
+        </a>
+        <a href="/qr" class="nav-link {% if request.url.path == '/qr' %}active{% endif %}">
+            <span class="icon"><i class="bi bi-qr-code"></i></span>
+            Escaner QR
+        </a>
         <a href="/train" class="nav-link {% if request.url.path == '/train' %}active{% endif %}">
             <span class="icon"><i class="bi bi-gpu-card"></i></span>
             Entrenar
