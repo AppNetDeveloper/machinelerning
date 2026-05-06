@@ -13,6 +13,8 @@ import io
 import json
 import asyncio
 import shutil
+import cv2
+import numpy as np
 import uuid
 from pathlib import Path
 from datetime import datetime
@@ -771,6 +773,77 @@ async def api_entrenamientos():
 async def api_predicciones():
     preds = await get_predictions(50)
     return {"predicciones": preds}
+
+
+@app.get("/api/qr/camaras")
+async def api_qr_camaras():
+    """Lista camaras disponibles para escaneo QR."""
+    cameras = camera_manager.list_cameras()
+    return {"cameras": cameras, "total": len(cameras)}
+
+
+@app.post("/api/qr/escanear")
+async def api_qr_escanear(camera_id: str = ""):
+    """Escanea un frame de la camara en busca de codigos QR y barras."""
+    if not camera_id:
+        return JSONResponse({"error": "camera_id requerido"}, status_code=400)
+
+    results = camera_manager.scan_qr(camera_id)
+
+    for r in results:
+        await save_qr_scan(r["type"], r["data"], camera_id)
+
+    return {"resultados": results, "total": len(results)}
+
+
+@app.post("/api/qr/escanear-imagen")
+async def api_qr_escanear_imagen(file: UploadFile = File(...)):
+    """Escanea una imagen subida en busca de codigos QR y barras."""
+    import numpy as np
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if frame is None:
+        return JSONResponse({"error": "Imagen no valida"}, status_code=400)
+
+    results = []
+    # QR
+    try:
+        qr = cv2.QRCodeDetector()
+        retval, decoded_info, points, _ = qr.detectAndDecodeMulti(frame)
+        if retval and decoded_info:
+            for text in decoded_info:
+                if text:
+                    results.append({"type": "QR", "data": text})
+    except Exception:
+        try:
+            qr = cv2.QRCodeDetector()
+            decoded, _, _ = qr.detectAndDecode(frame)
+            if decoded:
+                results.append({"type": "QR", "data": decoded})
+        except Exception:
+            pass
+
+    # Barcode
+    try:
+        barcode = cv2.barcode_BarcodeDetector()
+        decoded, _, _ = barcode.detectAndDecode(frame)
+        if decoded:
+            results.append({"type": "BARCODE", "data": decoded})
+    except Exception:
+        pass
+
+    for r in results:
+        await save_qr_scan(r["type"], r["data"], "upload")
+
+    return {"resultados": results, "total": len(results)}
+
+
+@app.get("/api/qr/historial")
+async def api_qr_historial(limit: int = 50):
+    """Obtiene el historial de escaneos QR/barcode."""
+    scans = await get_qr_scans(limit)
+    return {"escaneos": scans, "total": len(scans)}
 
 
 # ─── Main ────────────────────────────────────────────────────────

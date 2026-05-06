@@ -48,10 +48,24 @@
         </div>
 
         <!-- Scan counter -->
-        <div class="card">
+        <div class="card mb-3">
             <div class="card-body text-center">
                 <span class="text-muted">Escaneos esta sesion:</span>
                 <span id="scanCount" class="fw-bold fs-4" style="color:var(--accent);">0</span>
+            </div>
+        </div>
+
+        <!-- Upload image to scan -->
+        <div class="card">
+            <div class="card-header"><i class="bi bi-upload"></i> Escanear desde foto</div>
+            <div class="card-body">
+                <input type="file" id="qrFileInput" class="form-control mb-2" accept="image/*">
+                <div id="uploadPreview" class="text-center mb-2" style="display:none;">
+                    <img id="uploadImg" src="" alt="Preview" style="max-width:100%; border-radius:8px; max-height:200px;">
+                </div>
+                <button id="btnUploadScan" class="btn btn-outline-accent w-100" onclick="scanFromUpload()" disabled>
+                    <i class="bi bi-search"></i> Extraer QR de foto
+                </button>
             </div>
         </div>
     </div>
@@ -157,6 +171,64 @@ async function scanNow() {
     } catch (e) {
         console.error('Scan error:', e);
     }
+}
+
+// Upload file scan
+const qrFileInput = document.getElementById('qrFileInput');
+const btnUploadScan = document.getElementById('btnUploadScan');
+
+qrFileInput.addEventListener('change', function() {
+    const file = this.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            document.getElementById('uploadImg').src = e.target.result;
+            document.getElementById('uploadPreview').style.display = 'block';
+        };
+        reader.readAsDataURL(file);
+        btnUploadScan.disabled = false;
+    } else {
+        document.getElementById('uploadPreview').style.display = 'none';
+        btnUploadScan.disabled = true;
+    }
+});
+
+async function scanFromUpload() {
+    const file = qrFileInput.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    btnUploadScan.disabled = true;
+    btnUploadScan.textContent = 'Escaneando...';
+
+    try {
+        const resp = await fetch('/api/qr/escanear-imagen', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await resp.json();
+
+        if (data.resultados && data.resultados.length > 0) {
+            for (const r of data.resultados) {
+                addResult(r.type, r.data);
+            }
+        } else {
+            const noResults = document.getElementById('noResults');
+            noResults.style.display = 'none';
+            const list = document.getElementById('resultsList');
+            const div = document.createElement('div');
+            div.className = 'text-muted text-center py-2';
+            div.textContent = 'No se encontraron codigos QR en la imagen';
+            list.insertBefore(div, list.firstChild);
+        }
+    } catch (e) {
+        console.error('Upload scan error:', e);
+    }
+
+    btnUploadScan.disabled = false;
+    btnUploadScan.innerHTML = '<i class="bi bi-search"></i> Extraer QR de foto';
 }
 
 function addResult(type, data) {

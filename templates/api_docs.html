@@ -123,6 +123,52 @@ curl -X POST http://localhost:8000/api/predecir-lote \
     <div class="description">Historial de las ultimas 50 predicciones.</div>
 </div>
 
+<!-- QR API -->
+<h4 class="mt-4 mb-3" style="color:var(--accent);"><i class="bi bi-qr-code"></i> API Escaner QR</h4>
+
+<div class="api-endpoint">
+    <span class="method get">GET</span>
+    <span class="path">/api/qr/camaras</span>
+    <div class="description">Lista camaras disponibles para escaneo QR.</div>
+    <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer;">Ver respuesta</summary>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>{
+  "cameras": [{"id": "usb_0", "type": "usb", "name": "Camara USB 0", "resolution": "640x480"}],
+  "total": 1
+}</code></pre>
+    </details>
+</div>
+
+<div class="api-endpoint">
+    <span class="method post">POST</span>
+    <span class="path">/api/qr/escanear</span>
+    <div class="description">Escanea un frame de la camara en busca de codigos QR y barras. Requiere param <code>camera_id</code>.</div>
+    <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer;">Ver ejemplo</summary>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>curl -X POST "http://localhost:8000/api/qr/escanear?camera_id=usb_0"</code></pre>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>{
+  "resultados": [{"type": "QR", "data": "https://example.com"}],
+  "total": 1
+}</code></pre>
+    </details>
+</div>
+
+<div class="api-endpoint">
+    <span class="method post">POST</span>
+    <span class="path">/api/qr/escanear-imagen</span>
+    <div class="description">Escanea una imagen subida en busca de codigos QR y barras. Campo: <code>file</code>.</div>
+    <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer;">Ver ejemplo</summary>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>curl -X POST http://localhost:8000/api/qr/escanear-imagen -F "file=@foto_con_qr.jpg"</code></pre>
+    </details>
+</div>
+
+<div class="api-endpoint">
+    <span class="method get">GET</span>
+    <span class="path">/api/qr/historial</span>
+    <div class="description">Historial de los ultimos 50 escaneos QR/barcode.</div>
+</div>
+
 <!-- Interactive test -->
 <div class="card mt-4">
     <div class="card-header"><i class="bi bi-lightning"></i> Probar API</div>
