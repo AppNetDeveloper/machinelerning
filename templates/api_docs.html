@@ -174,16 +174,27 @@ curl -X POST http://localhost:8000/api/predecir-lote \
 
 <div class="api-endpoint">
     <span class="method post">POST</span>
-    <span class="path">/api/disparar</span>
+    <span class="path">/api/disparar/{camera_slug}</span>
     <div class="description">
-        Endpoint para sensores externos. Captura foto de la camara por defecto, ejecuta clasificacion ML + deteccion QR.
-        Sin autenticacion. Configure la camara y retorno en <a href="/settings" style="color:var(--accent);">Ajustes</a>.
+        Endpoint principal para sensores externos. Cada camara registrada tiene su propio endpoint con slug unico.
+        Captura foto, ejecuta clasificacion ML + deteccion QR, y opcionalmente envia el resultado a un callback URL.
+        Sin autenticacion. Configure camaras y callbacks en <a href="/camera" style="color:var(--accent);">Camara</a>.
     </div>
     <details class="mt-2">
-        <summary class="text-muted" style="cursor:pointer;">Ver respuesta (sin retorno)</summary>
+        <summary class="text-muted" style="cursor:pointer;">Ver ejemplo con curl</summary>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code># Disparar camara por slug:
+curl -X POST http://localhost:8000/api/disparar/camara-almacen
+
+# El slug se genera automaticamente del nombre de la camara:
+# "Camara Almacen" -> camara-almacen
+# "Linea Produccion 1" -> linea-produccion-1</code></pre>
+    </details>
+    <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer;">Ver respuesta (sin callback)</summary>
         <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>{
   "timestamp": "2026-05-06T23:30:00",
-  "camera": "usb_0",
+  "camera_slug": "camara-almacen",
+  "camera_name": "Camara Almacen",
   "ml": {
     "confeccion": "confeccion2",
     "confianza": 89.86,
@@ -196,14 +207,34 @@ curl -X POST http://localhost:8000/api/predecir-lote \
 }</code></pre>
     </details>
     <details class="mt-2">
-        <summary class="text-muted" style="cursor:pointer;">Ver respuesta (con retorno activo)</summary>
+        <summary class="text-muted" style="cursor:pointer;">Ver respuesta (con callback activo)</summary>
         <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>{
   "status": "processing",
   "callback": true,
-  "callback_url": "https://tu-servidor.com/webhook",
+  "camera_slug": "camara-almacen",
+  "camera_name": "Camara Almacen",
   "timestamp": "2026-05-06T23:30:00"
 }
-// El resultado completo se envia via POST al callback_url</code></pre>
+// El resultado completo se envia via POST al callback_url de la camara</code></pre>
+    </details>
+</div>
+
+<div class="api-endpoint">
+    <span class="method post">POST</span>
+    <span class="path">/api/disparar</span>
+    <div class="description">
+        Endpoint legacy. Retorna la lista de endpoints disponibles por camara.
+        Usa <code>/api/disparar/{slug}</code> para activar una camara especifica.
+    </div>
+    <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer;">Ver respuesta</summary>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>{
+  "error": "Especifica una camara. Usa /api/disparar/{slug}",
+  "camaras_disponibles": [
+    {"slug": "camara-almacen", "nombre": "Camara Almacen", "endpoint": "/api/disparar/camara-almacen"},
+    {"slug": "camara-linea-1", "nombre": "Camara Linea 1", "endpoint": "/api/disparar/camara-linea-1"}
+  ]
+}</code></pre>
     </details>
 </div>
 

@@ -84,8 +84,21 @@
                                placeholder="rtsp://user:pass@192.168.1.100:554/stream">
                     </div>
                     <input type="hidden" name="url" id="finalUrl">
+                    <hr style="border-color: rgba(255,255,255,0.1);">
+                    <div class="mb-3">
+                        <label class="form-label">URL de retorno (callback) <small class="text-muted">- opcional</small></label>
+                        <input type="url" name="callback_url" class="form-control"
+                               placeholder="https://tu-servidor.com/webhook">
+                        <small class="text-muted">URL que recibira el resultado via POST al disparar</small>
+                    </div>
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" name="callback_active" id="ipCallbackActive">
+                        <label class="form-check-label" for="ipCallbackActive">
+                            Activar callback (desactivado por defecto)
+                        </label>
+                    </div>
                     <button type="submit" class="btn btn-accent w-100" onclick="buildUrl()">
-                        <i class="bi bi-plus-circle"></i> Conectar Camara
+                        <i class="bi bi-plus-circle"></i> Registrar Camara IP
                     </button>
                 </form>
                 <div class="mt-2 small text-muted">
@@ -95,37 +108,50 @@
             </div>
         </div>
 
-        <!-- Camaras registradas -->
+        <!-- Camaras registradas (BD) -->
         <div class="card">
-            <div class="card-header"><i class="bi bi-camera-video"></i> Camaras Conectadas</div>
+            <div class="card-header"><i class="bi bi-camera-video"></i> Camaras Registradas</div>
             <div class="card-body">
-                {% if cameras %}
+                {% if db_cameras %}
                 <div class="list-group list-group-flush">
-                    {% for cam in cameras %}
-                    <div class="list-group-item bg-transparent d-flex justify-content-between align-items-center px-0"
+                    {% for cam in db_cameras %}
+                    <div class="list-group-item bg-transparent px-0"
                          style="border-color: rgba(255,255,255,0.1);">
-                        <div>
-                            <strong>{{ cam.name }}</strong><br>
-                            <small class="text-muted">{{ cam.type|upper }} | {{ cam.resolution }}</small>
-                        </div>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-light" 
-                                    onclick="selectCamera('{{ cam.id }}', '{{ cam.name }}')">
-                                <i class="bi bi-eye"></i>
-                            </button>
-                            <form method="POST" action="/camera/remove" style="display:inline;">
-                                <input type="hidden" name="camera_id" value="{{ cam.id }}">
-                                <button type="submit" class="btn btn-sm btn-outline-danger"
-                                        onclick="return confirm('Eliminar camara?')">
-                                    <i class="bi bi-trash"></i>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>{{ cam.name }}</strong><br>
+                                <small class="text-muted">{{ cam.camera_type|upper }} | {{ cam.resolution }}</small>
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn btn-sm btn-outline-light"
+                                        onclick="selectCamera('{{ cam.id }}', '{{ cam.name }}')">
+                                    <i class="bi bi-eye"></i>
                                 </button>
-                            </form>
+                                <form method="POST" action="/camera/remove" style="display:inline;">
+                                    <input type="hidden" name="camera_id" value="{{ cam.id }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger"
+                                            onclick="return confirm('Eliminar camara?')">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                        <div class="mt-1">
+                            <small class="text-muted">API:</small>
+                            <code class="small">POST /api/disparar/{{ cam.slug }}</code>
+                            {% if cam.callback_active == 'true' and cam.callback_url %}
+                            <br><small class="text-muted">Callback:</small>
+                            <code class="small">{{ cam.callback_url }}</code>
+                            <span class="badge bg-success ms-1" style="font-size:0.65rem;">activo</span>
+                            {% else %}
+                            <span class="badge bg-secondary ms-1" style="font-size:0.65rem;">sin callback</span>
+                            {% endif %}
                         </div>
                     </div>
                     {% endfor %}
                 </div>
                 {% else %}
-                <p class="text-muted mb-0">Sin camaras conectadas. Escanea USB o anade IP.</p>
+                <p class="text-muted mb-0">Sin camaras registradas. Escanea USB o anade IP.</p>
                 {% endif %}
             </div>
         </div>
@@ -273,27 +299,93 @@ async function scanCameras() {
     const btn = document.getElementById('scanBtn');
     const results = document.getElementById('usbResults');
     btn.disabled = true;
-    btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Escaneando...';
-    results.innerHTML = '';
+    btn.textContent = 'Escaneando...';
+    results.textContent = '';
 
     try {
         const res = await fetch('/camera/scan', { method: 'POST' });
         const data = await res.json();
 
         if (data.total === 0) {
-            results.innerHTML = '<p class="text-muted">No se encontraron camaras USB</p>';
+            const p = document.createElement('p');
+            p.className = 'text-muted';
+            p.textContent = 'No se encontraron camaras USB';
+            results.appendChild(p);
         } else {
-            data.cameras.forEach(cam => {
-                const div = document.createElement('div');
-                div.className = 'd-flex justify-content-between align-items-center py-2 border-bottom';
-                div.style.borderColor = 'rgba(255,255,255,0.1)';
-                div.innerHTML = '<span><strong>' + cam.name + '</strong> <small class="text-muted">(' + cam.resolution + ')</small></span>' +
-                    '<button class="btn btn-sm btn-outline-light" onclick="selectCamera(\'' + cam.id + '\', \'' + cam.name + '\')"><i class="bi bi-eye"></i> Usar</button>';
-                results.appendChild(div);
+            data.cameras.forEach((cam, idx) => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'py-2 border-bottom';
+                wrapper.style.borderColor = 'rgba(255,255,255,0.1)';
+
+                const info = document.createElement('div');
+                info.className = 'd-flex justify-content-between align-items-center mb-1';
+                const nameSpan = document.createElement('strong');
+                nameSpan.textContent = cam.name;
+                const resSmall = document.createElement('small');
+                resSmall.className = 'text-muted';
+                resSmall.textContent = ' (' + cam.resolution + ')';
+                info.appendChild(nameSpan);
+                info.appendChild(resSmall);
+                wrapper.appendChild(info);
+
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '/camera/register-usb';
+                form.className = 'mt-1';
+
+                const hName = document.createElement('input');
+                hName.type = 'hidden'; hName.name = 'name'; hName.value = cam.name;
+                const hSource = document.createElement('input');
+                hSource.type = 'hidden'; hSource.name = 'source'; hSource.value = cam.source;
+                const hRes = document.createElement('input');
+                hRes.type = 'hidden'; hRes.name = 'resolution'; hRes.value = cam.resolution;
+                form.appendChild(hName);
+                form.appendChild(hSource);
+                form.appendChild(hRes);
+
+                const inputGroup = document.createElement('div');
+                inputGroup.className = 'input-group input-group-sm mb-1';
+                const cbInput = document.createElement('input');
+                cbInput.type = 'url'; cbInput.name = 'callback_url';
+                cbInput.className = 'form-control form-control-sm';
+                cbInput.placeholder = 'Callback URL (opcional)';
+                cbInput.style.fontSize = '0.75rem';
+                inputGroup.appendChild(cbInput);
+                form.appendChild(inputGroup);
+
+                const actions = document.createElement('div');
+                actions.className = 'd-flex align-items-center gap-2';
+                const switchDiv = document.createElement('div');
+                switchDiv.className = 'form-check form-switch mb-0';
+                const switchInput = document.createElement('input');
+                switchInput.className = 'form-check-input';
+                switchInput.type = 'checkbox';
+                switchInput.name = 'callback_active';
+                switchInput.id = 'usbCb' + idx;
+                const switchLabel = document.createElement('label');
+                switchLabel.className = 'form-check-label small';
+                switchLabel.htmlFor = 'usbCb' + idx;
+                switchLabel.textContent = 'Callback';
+                switchDiv.appendChild(switchInput);
+                switchDiv.appendChild(switchLabel);
+                actions.appendChild(switchDiv);
+
+                const regBtn = document.createElement('button');
+                regBtn.type = 'submit';
+                regBtn.className = 'btn btn-sm btn-accent ms-auto';
+                regBtn.textContent = 'Registrar';
+                actions.appendChild(regBtn);
+                form.appendChild(actions);
+
+                wrapper.appendChild(form);
+                results.appendChild(wrapper);
             });
         }
     } catch (err) {
-        results.innerHTML = '<p class="text-danger">Error: ' + err.message + '</p>';
+        const p = document.createElement('p');
+        p.className = 'text-danger';
+        p.textContent = 'Error: ' + err.message;
+        results.appendChild(p);
     }
     btn.disabled = false;
     btn.innerHTML = '<i class="bi bi-search"></i> Escanear camaras USB';

@@ -35,6 +35,7 @@ from database import (
     save_prediction, get_predictions, get_dataset_stats,
     get_all_users, add_user, change_password, delete_user,
     save_qr_scan, get_qr_scans, get_setting, set_setting, get_trigger_settings,
+    create_camera, get_camera_by_slug, get_all_cameras, update_camera_db, delete_camera_db,
 )
 from auth import authenticate, get_current_user, require_auth
 from ml_model import model_manager
@@ -61,6 +62,10 @@ async def lifespan(app: FastAPI):
         print(f"Modelo cargado: {len(model_manager.class_names)} clases")
     else:
         print("Sin modelo entrenado. Ve a Entrenar para crear uno.")
+    await camera_manager.init_from_db()
+    db_cameras = camera_manager.list_cameras()
+    if db_cameras:
+        print(f"  Camaras cargadas desde BD: {len(db_cameras)}")
     yield
     camera_manager.release_all()
 
@@ -435,19 +440,14 @@ async def settings_page(request: Request):
         return RedirectResponse("/login", status_code=303)
 
     users = await get_all_users()
-    trigger = await get_trigger_settings()
-    cameras = camera_manager.list_cameras()
     return templates.TemplateResponse(request, "settings.html", {
         "request": request,
         "user": user,
         "users": users,
         "host": HOST,
         "port": PORT,
-        "trigger": trigger,
-        "cameras": cameras,
         "success": request.query_params.get("success"),
         "error": request.query_params.get("error"),
-        "trigger_saved": request.query_params.get("trigger_saved"),
     })
 
 
@@ -557,10 +557,12 @@ async def camera_page(request: Request):
 
     dataset_stats = await get_dataset_stats()
     cameras = camera_manager.list_cameras()
+    db_cameras = await get_all_cameras()
     return templates.TemplateResponse(request, "camera.html", {
         "request": request,
         "user": user,
         "cameras": cameras,
+        "db_cameras": db_cameras,
         "dataset_stats": dataset_stats,
     })
 
@@ -584,15 +586,70 @@ async def camera_add_ip(request: Request):
     form = await request.form()
     name = form.get("name", "").strip()
     url = form.get("url", "").strip()
+    callback_url = form.get("callback_url", "").strip()
+    callback_active = "true" if form.get("callback_active") else "false"
 
     if not name or not url:
         return RedirectResponse("/camera?error=Nombre+y+URL+requeridos", status_code=303)
 
-    result = camera_manager.add_ip_camera(name, url)
-    if "error" in result:
-        return RedirectResponse(f"/camera?error={result['error']}", status_code=303)
+    # Probar conexion
+    test = camera_manager.test_ip_camera(url)
+    if "error" in test:
+        return RedirectResponse(f"/camera?error={test['error']}", status_code=303)
 
-    return RedirectResponse(f"/camera?success=Camara+{name}+anadida", status_code=303)
+    resolution = test.get("resolution", "")
+
+    # Guardar en BD
+    cam = await create_camera(
+        name=name, camera_type="ip", source=url,
+        resolution=resolution, callback_url=callback_url,
+        callback_active=callback_active,
+    )
+
+    # Registrar en memoria
+    camera_manager.register_camera(
+        str(cam["id"]), "ip", url, name, cam["slug"],
+        resolution, callback_url, callback_active,
+    )
+
+    return RedirectResponse(f"/camera?success=Camara+{name}+registrada", status_code=303)
+
+
+@app.post("/camera/register-usb")
+async def camera_register_usb(request: Request):
+    """Registra una camara USB escaneada en la BD con callback opcional."""
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    form = await request.form()
+    name = form.get("name", "").strip()
+    source = form.get("source", "").strip()
+    resolution = form.get("resolution", "").strip()
+    callback_url = form.get("callback_url", "").strip()
+    callback_active = "true" if form.get("callback_active") else "false"
+
+    if not name or not source:
+        return RedirectResponse("/camera?error=Datos+incompletos", status_code=303)
+
+    # Verificar que no esta ya registrada
+    existing = await get_all_cameras()
+    for c in existing:
+        if c["camera_type"] == "usb" and c["source"] == source:
+            return RedirectResponse("/camera?error=Camara+USB+ya+registrada", status_code=303)
+
+    cam = await create_camera(
+        name=name, camera_type="usb", source=source,
+        resolution=resolution, callback_url=callback_url,
+        callback_active=callback_active,
+    )
+
+    camera_manager.register_camera(
+        str(cam["id"]), "usb", source, name, cam["slug"],
+        resolution, callback_url, callback_active,
+    )
+
+    return RedirectResponse(f"/camera?success=Camara+{name}+registrada", status_code=303)
 
 
 @app.post("/camera/remove")
@@ -603,6 +660,13 @@ async def camera_remove(request: Request):
 
     form = await request.form()
     cam_id = form.get("camera_id", "")
+
+    # Eliminar de BD tambien
+    try:
+        await delete_camera_db(int(cam_id))
+    except (ValueError, TypeError):
+        pass
+
     camera_manager.remove_camera(cam_id)
     return RedirectResponse("/camera?success=Camara+eliminada", status_code=303)
 
@@ -851,35 +915,19 @@ async def api_qr_historial(limit: int = 50):
     return {"escaneos": scans, "total": len(scans)}
 
 
-# ─── Trigger / Sensor ────────────────────────────────────────────
-@app.post("/api/disparar")
-async def api_disparar(request: Request):
-    """
-    Endpoint de disparo para sensores externos.
-    Captura una foto de la camara por defecto, ejecuta ML + QR, y retorna resultado.
-    Si hay callback configurado, envia resultado por HTTP POST al callback URL.
-    """
-    settings = await get_trigger_settings()
-    camera_id = settings["default_camera"]
-
-    if not camera_id:
-        return JSONResponse(
-            {"error": "No hay camara por defecto configurada. Configure en Ajustes."},
-            status_code=400
-        )
-
-    # Capturar frame
+# ─── Trigger / Sensor por camara ─────────────────────────────────
+async def _run_trigger(camera_id: str, camera_slug: str, camera_name: str,
+                       callback_url: str = '', callback_active: str = 'false'):
+    """Logica comun de trigger: captura, ML, QR, callback."""
     frame, error = camera_manager.get_frame(camera_id)
     if error:
         return JSONResponse({"error": f"Error de camara: {error}"}, status_code=503)
 
-    # Convertir a PIL para prediccion ML
-    import numpy as np
     from PIL import Image
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(frame_rgb)
 
-    # Ejecutar prediccion ML
+    # ML prediction
     ml_result = {}
     try:
         if model_manager.is_loaded:
@@ -893,7 +941,7 @@ async def api_disparar(request: Request):
     except Exception as e:
         ml_result = {"error": str(e)}
 
-    # Ejecutar deteccion QR
+    # QR detection
     qr_results = []
     try:
         qr_results = camera_manager.scan_qr(camera_id)
@@ -902,17 +950,17 @@ async def api_disparar(request: Request):
     except Exception as e:
         qr_results = [{"error": str(e)}]
 
-    # Resultado combinado
     timestamp = datetime.now().isoformat()
     result = {
         "timestamp": timestamp,
-        "camera": camera_id,
+        "camera_slug": camera_slug,
+        "camera_name": camera_name,
         "ml": ml_result,
         "qr": qr_results,
         "qr_count": len([r for r in qr_results if "error" not in r]),
     }
 
-    # Guardar foto del trigger
+    # Guardar foto
     try:
         trigger_dir = DATASET_DIR.parent / "trigger_captures"
         trigger_dir.mkdir(exist_ok=True)
@@ -924,10 +972,9 @@ async def api_disparar(request: Request):
         pass
 
     # Callback o respuesta directa
-    if settings["callback_active"] == "true" and settings["callback_url"]:
+    if callback_active == "true" and callback_url:
         import asyncio
         import httpx
-        callback_url = settings["callback_url"]
 
         async def send_callback():
             try:
@@ -941,28 +988,55 @@ async def api_disparar(request: Request):
             "status": "processing",
             "callback": True,
             "callback_url": callback_url,
+            "camera": camera_slug,
             "timestamp": timestamp,
         })
     else:
         return JSONResponse(result)
 
 
+@app.post("/api/disparar/{camera_slug}")
+async def api_disparar_camara(camera_slug: str):
+    """Trigger por camara especifica. Sin autenticacion."""
+    cam = await get_camera_by_slug(camera_slug)
+    if not cam:
+        return JSONResponse({"error": f"Camara '{camera_slug}' no encontrada"}, status_code=404)
+
+    return await _run_trigger(
+        str(cam["id"]), cam["slug"], cam["name"],
+        cam.get("callback_url", ""), cam.get("callback_active", "false"),
+    )
+
+
+@app.post("/api/disparar")
+async def api_disparar_legacy():
+    """Endpoint legacy. Lista camaras disponibles."""
+    db_cams = await get_all_cameras()
+    if not db_cams:
+        return JSONResponse({
+            "error": "No hay camaras registradas. Registra camaras en la pagina de Camara.",
+            "camaras_disponibles": [],
+        }, status_code=404)
+
+    endpoints = []
+    for c in db_cams:
+        endpoints.append({
+            "slug": c["slug"],
+            "name": c["name"],
+            "endpoint": f"/api/disparar/{c['slug']}",
+            "callback_active": c["callback_active"],
+        })
+
+    return JSONResponse({
+        "mensaje": "Usa /api/disparar/{slug} para activar una camara especifica.",
+        "camaras_disponibles": endpoints,
+    })
+
+
 @app.post("/settings/save-trigger")
 async def save_trigger_settings(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    form = await request.form()
-    default_camera = form.get("default_camera", "")
-    callback_url = form.get("callback_url", "")
-    callback_active = "true" if form.get("callback_active") else "false"
-
-    await set_setting("default_camera", default_camera)
-    await set_setting("callback_url", callback_url)
-    await set_setting("callback_active", callback_active)
-
-    return RedirectResponse("/settings?trigger_saved=1", status_code=303)
+    """Ruta legacy - redirige a camara."""
+    return RedirectResponse("/camera", status_code=303)
 
 
 # ─── Main ────────────────────────────────────────────────────────

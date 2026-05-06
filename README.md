@@ -71,6 +71,8 @@ machinelerning/
 
 ## API REST
 
+### Clasificacion ML
+
 | Endpoint | Metodo | Descripcion |
 |----------|--------|-------------|
 | `/api` | GET | Estado del modelo |
@@ -81,6 +83,50 @@ machinelerning/
 | `/api/dataset/stats` | GET | Estadisticas del dataset |
 | `/api/entrenamientos` | GET | Historial de entrenamientos |
 | `/api/predicciones` | GET | Historial de predicciones |
+
+### Escaner QR
+
+| Endpoint | Metodo | Descripcion |
+|----------|--------|-------------|
+| `/api/qr/camaras` | GET | Lista camaras disponibles para QR |
+| `/api/qr/escanear` | POST | Escanea frame de camara (param: `camera_id`) |
+| `/api/qr/escanear-imagen` | POST | Escanea imagen subida (campo: `file`) |
+| `/api/qr/historial` | GET | Historial de escaneos QR/barcode |
+
+### Disparador / Sensor (Trigger)
+
+Cada camara registrada tiene su propio endpoint API. El slug se genera automaticamente del nombre.
+
+| Endpoint | Metodo | Descripcion |
+|----------|--------|-------------|
+| `/api/disparar/{slug}` | POST | Activa una camara: captura foto, ML + QR, callback opcional |
+| `/api/disparar` | POST | Lista endpoints disponibles por camara |
+
+### Ejemplo: disparar camara
+
+```bash
+# Activar camara por slug (sin callback -> respuesta directa):
+curl -X POST http://localhost:8000/api/disparar/camara-almacen
+
+# Con callback activo -> el resultado se envia al callback_url configurado en la camara
+```
+
+Respuesta (sin callback):
+```json
+{
+    "timestamp": "2026-05-06T23:30:00",
+    "camera_slug": "camara-almacen",
+    "camera_name": "Camara Almacen",
+    "ml": {
+        "confeccion": "confeccion2",
+        "confianza": 89.86,
+        "probabilidades": {"confeccion2": 89.86, "confeccion3": 7.21, "confeccion1": 2.93},
+        "confiable": true
+    },
+    "qr": [{"type": "QR", "data": "https://example.com"}],
+    "qr_count": 1
+}
+```
 
 ### Ejemplo de prediccion
 

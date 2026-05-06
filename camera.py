@@ -38,37 +38,27 @@ class CameraManager:
             }
 
     def scan_usb_cameras(self) -> list[dict]:
-        """Escanea camaras USB conectadas al servidor."""
-        # Liberar capturas activas antes de escanear
+        """Escanea camaras USB conectadas. Solo detecta, no registra."""
         self.release_all()
         found = []
         for index in range(5):
             cap = cv2.VideoCapture(index)
             if cap.isOpened():
-                # Forzar formato MJPEG para obtener color
                 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
                 time.sleep(0.2)
                 ret, frame = cap.read()
                 if ret and frame is not None:
-                    cam_id = f"usb_{index}"
-                    cam_info = {
-                        "id": cam_id,
+                    found.append({
                         "type": "usb",
-                        "source": index,
+                        "source": str(index),
                         "name": f"Camara USB {index}",
                         "resolution": f"{int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}",
-                    }
-                    self.cameras[cam_id] = cam_info
-                    found.append(cam_info)
+                    })
                 cap.release()
         return found
 
-    def add_ip_camera(self, name: str, url: str) -> dict:
-        """Anade una camara IP por URL RTSP o MJPEG."""
-        cam_id = f"ip_{self._next_id}"
-        self._next_id += 1
-
-        # Probar conexion
+    def test_ip_camera(self, url: str) -> dict:
+        """Prueba conexion a una camara IP. Retorna info o error."""
         cap = cv2.VideoCapture(url)
         if not cap.isOpened():
             cap.release()
@@ -80,15 +70,22 @@ class CameraManager:
         if not ret or frame is None:
             return {"error": "Conectado pero sin imagen. Verifica la URL."}
 
-        cam_info = {
+        return {"resolution": f"{frame.shape[1]}x{frame.shape[0]}"}
+
+    def register_camera(self, cam_id: str, cam_type: str, source, name: str,
+                        slug: str, resolution: str = '',
+                        callback_url: str = '', callback_active: str = 'false'):
+        """Registra una camara en memoria (tras guardar en BD)."""
+        self.cameras[cam_id] = {
             "id": cam_id,
-            "type": "ip",
-            "source": url,
+            "type": cam_type,
+            "source": int(source) if cam_type == "usb" else source,
             "name": name,
-            "resolution": f"{frame.shape[1]}x{frame.shape[0]}",
+            "slug": slug,
+            "resolution": resolution,
+            "callback_url": callback_url,
+            "callback_active": callback_active,
         }
-        self.cameras[cam_id] = cam_info
-        return cam_info
 
     def remove_camera(self, cam_id: str):
         """Elimina una camara del gestor."""

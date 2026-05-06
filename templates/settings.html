@@ -166,50 +166,16 @@
             </div>
         </div>
 
-        <!-- Trigger / Sensor -->
+        <!-- Trigger info -->
         <div class="card mb-4">
             <div class="card-header"><i class="bi bi-lightning"></i> Disparador / Sensor</div>
             <div class="card-body">
-                {% if trigger_saved %}
-                <div class="alert alert-success py-2">
-                    <i class="bi bi-check-circle"></i> Configuracion de disparador guardada
-                </div>
-                {% endif %}
-                <form method="POST" action="/settings/save-trigger">
-                    <div class="mb-3">
-                        <label class="form-label">Camara por defecto</label>
-                        <select name="default_camera" class="form-select">
-                            <option value="">-- Desactivado --</option>
-                            {% for cam in cameras %}
-                            <option value="{{ cam.id }}" {% if trigger.default_camera == cam.id %}selected{% endif %}>
-                                {{ cam.name }} ({{ cam.resolution }})
-                            </option>
-                            {% endfor %}
-                        </select>
-                        <small class="text-muted">Camara que usara /api/disparar</small>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">URL de retorno</label>
-                        <input type="url" name="callback_url" class="form-control"
-                               value="{{ trigger.callback_url }}"
-                               placeholder="https://tu-servidor.com/webhook">
-                        <small class="text-muted">URL que recibira el resultado via POST</small>
-                    </div>
-                    <div class="mb-3 form-check form-switch">
-                        <input class="form-check-input" type="checkbox" name="callback_active"
-                               id="callbackActive" {% if trigger.callback_active == 'true' %}checked{% endif %}>
-                        <label class="form-check-label" for="callbackActive">
-                            Activar retorno (en vez de respuesta directa)
-                        </label>
-                    </div>
-                    <button type="submit" class="btn btn-accent w-100">
-                        <i class="bi bi-save"></i> Guardar Disparador
-                    </button>
-                    <p class="text-muted small mt-2 mb-0">
-                        <i class="bi bi-info-circle"></i>
-                        Endpoint: <code>POST /api/disparar</code> (sin autenticacion)
-                    </p>
-                </form>
+                <p class="text-muted small mb-2">
+                    <i class="bi bi-info-circle"></i>
+                    Cada camara registrada tiene su propio endpoint API y callback.
+                    Configuralo en la pagina de <a href="/camera" style="color:var(--accent);">Camara</a>.
+                </p>
+                <code class="small">POST /api/disparar/&lt;slug&gt;</code>
             </div>
         </div>
 
