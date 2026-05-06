@@ -169,6 +169,44 @@ curl -X POST http://localhost:8000/api/predecir-lote \
     <div class="description">Historial de los ultimos 50 escaneos QR/barcode.</div>
 </div>
 
+<!-- Trigger API -->
+<h4 class="mt-4 mb-3" style="color:var(--accent);"><i class="bi bi-lightning"></i> API Trigger / Sensor</h4>
+
+<div class="api-endpoint">
+    <span class="method post">POST</span>
+    <span class="path">/api/disparar</span>
+    <div class="description">
+        Endpoint para sensores externos. Captura foto de la camara por defecto, ejecuta clasificacion ML + deteccion QR.
+        Sin autenticacion. Configure la camara y callback en <a href="/settings" style="color:var(--accent);">Ajustes</a>.
+    </div>
+    <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer;">Ver respuesta (sin callback)</summary>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>{
+  "timestamp": "2026-05-06T23:30:00",
+  "camera": "usb_0",
+  "ml": {
+    "confeccion": "confeccion2",
+    "confianza": 89.86,
+    "probabilidades": {"confeccion2": 89.86, "confeccion3": 7.21, "confeccion1": 2.93},
+    "confiable": true
+  },
+  "qr": [{"type": "QR", "data": "https://example.com"}],
+  "qr_count": 1,
+  "capture_path": "/path/to/trigger_captures/trigger_20260506_233000.jpg"
+}</code></pre>
+    </details>
+    <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer;">Ver respuesta (con callback activo)</summary>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>{
+  "status": "processing",
+  "callback": true,
+  "callback_url": "https://tu-servidor.com/webhook",
+  "timestamp": "2026-05-06T23:30:00"
+}
+// El resultado completo se envia via POST al callback_url</code></pre>
+    </details>
+</div>
+
 <!-- Interactive test -->
 <div class="card mt-4">
     <div class="card-header"><i class="bi bi-lightning"></i> Probar API</div>

@@ -34,7 +34,7 @@ from database import (
     init_db, save_training_run, get_training_runs, get_training_run,
     save_prediction, get_predictions, get_dataset_stats,
     get_all_users, add_user, change_password, delete_user,
-    save_qr_scan, get_qr_scans,
+    save_qr_scan, get_qr_scans, get_setting, set_setting, get_trigger_settings,
 )
 from auth import authenticate, get_current_user, require_auth
 from ml_model import model_manager
@@ -435,14 +435,19 @@ async def settings_page(request: Request):
         return RedirectResponse("/login", status_code=303)
 
     users = await get_all_users()
+    trigger = await get_trigger_settings()
+    cameras = camera_manager.list_cameras()
     return templates.TemplateResponse(request, "settings.html", {
         "request": request,
         "user": user,
         "users": users,
         "host": HOST,
         "port": PORT,
+        "trigger": trigger,
+        "cameras": cameras,
         "success": request.query_params.get("success"),
         "error": request.query_params.get("error"),
+        "trigger_saved": request.query_params.get("trigger_saved"),
     })
 
 
@@ -844,6 +849,120 @@ async def api_qr_historial(limit: int = 50):
     """Obtiene el historial de escaneos QR/barcode."""
     scans = await get_qr_scans(limit)
     return {"escaneos": scans, "total": len(scans)}
+
+
+# ─── Trigger / Sensor ────────────────────────────────────────────
+@app.post("/api/disparar")
+async def api_disparar(request: Request):
+    """
+    Endpoint de disparo para sensores externos.
+    Captura una foto de la camara por defecto, ejecuta ML + QR, y retorna resultado.
+    Si hay callback configurado, envia resultado por HTTP POST al callback URL.
+    """
+    settings = await get_trigger_settings()
+    camera_id = settings["default_camera"]
+
+    if not camera_id:
+        return JSONResponse(
+            {"error": "No hay camara por defecto configurada. Configure en Ajustes."},
+            status_code=400
+        )
+
+    # Capturar frame
+    frame, error = camera_manager.get_frame(camera_id)
+    if error:
+        return JSONResponse({"error": f"Error de camara: {error}"}, status_code=503)
+
+    # Convertir a PIL para prediccion ML
+    import numpy as np
+    from PIL import Image
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    pil_image = Image.fromarray(frame_rgb)
+
+    # Ejecutar prediccion ML
+    ml_result = {}
+    try:
+        if model_manager.is_loaded:
+            ml_result = model_manager.predict(pil_image, use_tta=True)
+            await save_prediction(
+                f"trigger_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                ml_result.get("confeccion", ""),
+                ml_result.get("confianza", 0),
+                ml_result.get("probabilidades", {})
+            )
+    except Exception as e:
+        ml_result = {"error": str(e)}
+
+    # Ejecutar deteccion QR
+    qr_results = []
+    try:
+        qr_results = camera_manager.scan_qr(camera_id)
+        for r in qr_results:
+            await save_qr_scan(r["type"], r["data"], camera_id)
+    except Exception as e:
+        qr_results = [{"error": str(e)}]
+
+    # Resultado combinado
+    timestamp = datetime.now().isoformat()
+    result = {
+        "timestamp": timestamp,
+        "camera": camera_id,
+        "ml": ml_result,
+        "qr": qr_results,
+        "qr_count": len([r for r in qr_results if "error" not in r]),
+    }
+
+    # Guardar foto del trigger
+    try:
+        trigger_dir = DATASET_DIR.parent / "trigger_captures"
+        trigger_dir.mkdir(exist_ok=True)
+        filename = f"trigger_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        filepath = trigger_dir / filename
+        cv2.imwrite(str(filepath), frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        result["capture_path"] = str(filepath)
+    except Exception:
+        pass
+
+    # Callback o respuesta directa
+    if settings["callback_active"] == "true" and settings["callback_url"]:
+        import asyncio
+        import httpx
+        callback_url = settings["callback_url"]
+
+        async def send_callback():
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    await client.post(callback_url, json=result)
+            except Exception as e:
+                print(f"Callback error: {e}")
+
+        asyncio.create_task(send_callback())
+        return JSONResponse({
+            "status": "processing",
+            "callback": True,
+            "callback_url": callback_url,
+            "timestamp": timestamp,
+        })
+    else:
+        return JSONResponse(result)
+
+
+@app.post("/settings/save-trigger")
+async def save_trigger_settings(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    form = await request.form()
+    default_camera = form.get("default_camera", "")
+    callback_url = form.get("callback_url", "")
+    callback_active = "true" if form.get("callback_active") else "false"
+
+    await set_setting("default_camera", default_camera)
+    await set_setting("callback_url", callback_url)
+    await set_setting("callback_active", callback_active)
+
+    return RedirectResponse("/settings?trigger_saved=1", status_code=303)
 
 
 # ─── Main ────────────────────────────────────────────────────────

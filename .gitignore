@@ -11,3 +11,4 @@ data/
 *.swp
 *.swo
 .pytest_cache/
+trigger_captures/

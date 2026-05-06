@@ -64,6 +64,11 @@ async def init_db():
                 camera_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
         """)
 
         # Crear admin si no existe
@@ -256,3 +261,30 @@ async def get_qr_scans(limit: int = 100) -> list[dict]:
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+
+async def get_setting(key: str) -> str | None:
+    """Obtiene un valor de configuracion."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+
+async def set_setting(key: str, value: str):
+    """Guarda un valor de configuracion."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, value)
+        )
+        await db.commit()
+
+
+async def get_trigger_settings() -> dict:
+    """Obtiene todas las configuraciones de trigger."""
+    return {
+        "default_camera": await get_setting("default_camera") or "",
+        "callback_url": await get_setting("callback_url") or "",
+        "callback_active": await get_setting("callback_active") or "false",
+    }
