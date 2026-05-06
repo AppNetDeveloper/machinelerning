@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Dataset - Confecciones{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Gestion del Dataset</h2>
+    <p>Administra las imagenes de entrenamiento por clase</p>
+</div>
+
+<!-- Stats -->
+<div class="row g-3 mb-4">
+    <div class="col-md-2">
+        <div class="stat-card">
+            <div class="stat-number">{{ total_images }}</div>
+            <div class="stat-label">Total</div>
+        </div>
+    </div>
+    {% for class_name, count in dataset_stats.items() %}
+    <div class="col-md-2">
+        <div class="stat-card">
+            <div class="stat-number">{{ count }}</div>
+            <div class="stat-label">{{ class_name }}</div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Upload + New class -->
+<div class="row g-4 mb-4">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-upload"></i> Subir Imagenes</div>
+            <div class="card-body">
+                <form method="POST" action="/dataset/upload" enctype="multipart/form-data" id="uploadForm">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label">Clase destino</label>
+                            <select name="class_name" class="form-select" required>
+                                {% for class_name in dataset_stats.keys() %}
+                                <option value="{{ class_name }}">{{ class_name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-8">
+                            <label class="form-label">Imagenes</label>
+                            <input type="file" name="files" class="form-control" multiple accept="image/*" required>
+                        </div>
+                    </div>
+                    <div class="dropzone mt-3" id="dropzone">
+                        <div class="icon"><i class="bi bi-cloud-arrow-up"></i></div>
+                        <p class="mb-1">Arrastra imagenes aqui o haz clic para seleccionar</p>
+                        <small class="text-muted">JPG, PNG, WebP - Se subiran a la clase seleccionada</small>
+                    </div>
+                    <button type="submit" class="btn btn-accent mt-3">
+                        <i class="bi bi-upload"></i> Subir Imagenes
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-folder-plus"></i> Nueva Clase</div>
+            <div class="card-body">
+                <form method="POST" action="/dataset/new-class">
+                    <div class="mb-3">
+                        <label class="form-label">Nombre de la clase</label>
+                        <input type="text" name="class_name" class="form-control"
+                               placeholder="ej: confeccion4" required pattern="[a-zA-Z0-9_\- ]+">
+                    </div>
+                    <button type="submit" class="btn btn-outline-light w-100">
+                        <i class="bi bi-plus-circle"></i> Crear Clase
+                    </button>
+                </form>
+                <hr style="border-color: rgba(255,255,255,0.1);">
+                <p class="text-muted small mb-0">
+                    <i class="bi bi-info-circle"></i>
+                    Crea una carpeta nueva en el dataset. Despues sube imagenes a esa clase.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Image gallery per class -->
+{% for class_name, images in images_by_class.items() %}
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-folder"></i> {{ class_name }} ({{ images|length }} imagenes)</span>
+        <span class="badge bg-secondary">{{ images|length }}</span>
+    </div>
+    <div class="card-body">
+        {% if images %}
+        <div class="image-grid">
+            {% for img in images %}
+            <div class="image-item">
+                <img src="/dataset-files/{{ class_name }}/{{ img }}" alt="{{ img }}" loading="lazy">
+                <form method="POST" action="/dataset/delete" style="display:inline;">
+                    <input type="hidden" name="class_name" value="{{ class_name }}">
+                    <input type="hidden" name="filename" value="{{ img }}">
+                    <button type="submit" class="delete-btn" title="Eliminar"
+                            onclick="return confirm('Eliminar {{ img }}?')">
+                        <i class="bi bi-x"></i>
+                    </button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted text-center py-4">Sin imagenes en esta clase</p>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.querySelector('input[type="file"]');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+    fileInput.files = e.dataTransfer.files;
+});
+
+const params = new URLSearchParams(window.location.search);
+if (params.get('uploaded')) {
+    showToast(params.get('uploaded') + ' imagen(es) subida(s) correctamente', 'success');
+}
+if (params.get('deleted')) {
+    showToast('Imagen eliminada', 'info');
+}
+if (params.get('created')) {
+    showToast('Clase "' + params.get('created') + '" creada', 'success');
+}
+
+function showToast(msg, type) {
+    const alert = document.createElement('div');
+    alert.className = 'alert alert-' + (type === 'success' ? 'success' : 'info') + ' position-fixed top-0 end-0 m-3';
+    alert.style.zIndex = '9999';
+    const icon = document.createElement('i');
+    icon.className = 'bi bi-check-circle';
+    alert.appendChild(icon);
+    alert.appendChild(document.createTextNode(' ' + msg));
+    document.body.appendChild(alert);
+    setTimeout(() => alert.remove(), 3000);
+}
+</script>
+{% endblock %}

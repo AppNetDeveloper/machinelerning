@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Historial - Confecciones{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Historial</h2>
+    <p>Registro de entrenamientos y predicciones</p>
+</div>
+
+<!-- Tabs -->
+<ul class="nav nav-tabs mb-4" style="border-color: rgba(255,255,255,0.1);">
+    <li class="nav-item">
+        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-trains"
+                style="color: var(--text-light); background: transparent; border-color: rgba(255,255,255,0.1);">
+            <i class="bi bi-gpu-card"></i> Entrenamientos ({{ runs|length }})
+        </button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-preds"
+                style="color: var(--text-light); background: transparent; border-color: rgba(255,255,255,0.1);">
+            <i class="bi bi-search"></i> Predicciones ({{ predictions|length }})
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <!-- Training runs -->
+    <div class="tab-pane fade show active" id="tab-trains">
+        <div class="card">
+            <div class="card-body">
+                {% if runs %}
+                <div class="table-responsive">
+                    <table class="table table-dark">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Estado</th>
+                                <th>Etapas</th>
+                                <th>Mejor Val Acc</th>
+                                <th>Train Acc</th>
+                                <th>Creado</th>
+                                <th>Completado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for run in runs %}
+                            <tr>
+                                <td>#{{ run.id }}</td>
+                                <td><span class="badge-status {{ run.status }}">{{ run.status }}</span></td>
+                                <td>{{ run.epochs_head }}+{{ run.epochs_finetune }}</td>
+                                <td>
+                                    {% if run.best_val_acc %}
+                                        <strong>{{ "%.1f"|format(run.best_val_acc) }}%</strong>
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if run.final_train_acc %}
+                                        {{ "%.1f"|format(run.final_train_acc) }}%
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                                <td><small>{{ run.created_at }}</small></td>
+                                <td><small>{{ run.completed_at or '-' }}</small></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-4">Sin entrenamientos registrados</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Predictions -->
+    <div class="tab-pane fade" id="tab-preds">
+        <div class="card">
+            <div class="card-body">
+                {% if predictions %}
+                <div class="table-responsive">
+                    <table class="table table-dark">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Imagen</th>
+                                <th>Clase Predicha</th>
+                                <th>Confianza</th>
+                                <th>Fecha</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for pred in predictions %}
+                            <tr>
+                                <td>#{{ pred.id }}</td>
+                                <td><small>{{ pred.image_name }}</small></td>
+                                <td><strong>{{ pred.predicted_class }}</strong></td>
+                                <td>
+                                    <span style="color: {% if pred.confidence >= 80 %}var(--success){% elif pred.confidence >= 50 %}var(--warning){% else %}var(--danger){% endif %}">
+                                        {{ "%.1f"|format(pred.confidence) }}%
+                                    </span>
+                                </td>
+                                <td><small>{{ pred.created_at }}</small></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-4">Sin predicciones registradas</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

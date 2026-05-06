@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}API Docs - Confecciones{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Documentacion de la API</h2>
+    <p>Endpoints REST para integrar el clasificador en otras aplicaciones</p>
+</div>
+
+<!-- Base URL -->
+<div class="alert alert-info mb-4">
+    <strong>Base URL:</strong> <code>http://localhost:8000/api</code><br>
+    <strong>Formato:</strong> JSON | <strong>Auth:</strong> No requerida para endpoints /api
+</div>
+
+<!-- Endpoints -->
+<div class="api-endpoint">
+    <span class="method get">GET</span>
+    <span class="path">/api</span>
+    <div class="description">Estado general del sistema. Retorna si el modelo esta cargado y las clases disponibles.</div>
+    <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer;">Ver respuesta</summary>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>{
+  "status": "ok",
+  "modelo_cargado": true,
+  "clases_disponibles": ["confeccion1", "confeccion2", "confeccion3"],
+  "version": "3.0.0"
+}</code></pre>
+    </details>
+</div>
+
+<div class="api-endpoint">
+    <span class="method get">GET</span>
+    <span class="path">/api/clases</span>
+    <div class="description">Lista todas las clases que el modelo puede predecir.</div>
+    <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer;">Ver respuesta</summary>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>{
+  "clases": ["confeccion1", "confeccion2", "confeccion3"],
+  "total": 3
+}</code></pre>
+    </details>
+</div>
+
+<div class="api-endpoint">
+    <span class="method post">POST</span>
+    <span class="path">/api/predecir</span>
+    <div class="description">
+        Clasifica una imagen con TTA. Acepta <code>multipart/form-data</code> con un campo <code>file</code>.
+    </div>
+    <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer;">Ver ejemplo</summary>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code># Con curl:
+curl -X POST http://localhost:8000/api/predecir \
+  -F "file=@foto.jpg"
+
+# Con Python:
+import requests
+r = requests.post("http://localhost:8000/api/predecir",
+                  files={"file": open("foto.jpg", "rb")})
+print(r.json())
+
+# Respuesta:
+{
+  "confeccion": "confeccion1",
+  "confianza": 92.34,
+  "probabilidades": {
+    "confeccion1": 92.34,
+    "confeccion2": 5.12,
+    "confeccion3": 2.54
+  },
+  "confiable": true,
+  "tta": true
+}</code></pre>
+    </details>
+</div>
+
+<div class="api-endpoint">
+    <span class="method post">POST</span>
+    <span class="path">/api/predecir-lote</span>
+    <div class="description">
+        Clasifica multiples imagenes a la vez. Acepta multiples archivos en el campo <code>files</code>.
+    </div>
+    <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer;">Ver ejemplo</summary>
+        <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code># Con curl:
+curl -X POST http://localhost:8000/api/predecir-lote \
+  -F "files=@foto1.jpg" \
+  -F "files=@foto2.jpg"
+
+# Respuesta:
+{
+  "resultados": [
+    {"archivo": "foto1.jpg", "confeccion": "confeccion1", "confianza": 92.34, ...},
+    {"archivo": "foto2.jpg", "confeccion": "confeccion3", "confianza": 87.12, ...}
+  ],
+  "total": 2
+}</code></pre>
+    </details>
+</div>
+
+<div class="api-endpoint">
+    <span class="method get">GET</span>
+    <span class="path">/api/modelo/status</span>
+    <div class="description">Estado detallado del modelo (cargado, tamano, clases).</div>
+</div>
+
+<div class="api-endpoint">
+    <span class="method get">GET</span>
+    <span class="path">/api/dataset/stats</span>
+    <div class="description">Estadisticas del dataset: numero de imagenes por clase.</div>
+</div>
+
+<div class="api-endpoint">
+    <span class="method get">GET</span>
+    <span class="path">/api/entrenamientos</span>
+    <div class="description">Historial de los ultimos 20 entrenamientos.</div>
+</div>
+
+<div class="api-endpoint">
+    <span class="method get">GET</span>
+    <span class="path">/api/predicciones</span>
+    <div class="description">Historial de las ultimas 50 predicciones.</div>
+</div>
+
+<!-- Interactive test -->
+<div class="card mt-4">
+    <div class="card-header"><i class="bi bi-lightning"></i> Probar API</div>
+    <div class="card-body">
+        <p class="text-muted">Prueba el endpoint de prediccion directamente desde aqui:</p>
+        <form id="apiTestForm">
+            <div class="row g-3">
+                <div class="col-md-8">
+                    <input type="file" id="apiTestFile" class="form-control" accept="image/*">
+                </div>
+                <div class="col-md-4">
+                    <button type="submit" class="btn btn-accent w-100">
+                        <i class="bi bi-send"></i> Probar /api/predecir
+                    </button>
+                </div>
+            </div>
+        </form>
+        <pre id="apiTestResult" class="mt-3" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px; display: none; max-height: 300px; overflow-y: auto;"><code></code></pre>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('apiTestForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fileInput = document.getElementById('apiTestFile');
+    const resultEl = document.getElementById('apiTestResult');
+
+    if (!fileInput.files[0]) return;
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    resultEl.style.display = 'block';
+    resultEl.querySelector('code').textContent = 'Cargando...';
+
+    try {
+        const r = await fetch('/api/predecir', { method: 'POST', body: formData });
+        const data = await r.json();
+        resultEl.querySelector('code').textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+        resultEl.querySelector('code').textContent = 'Error: ' + err.message;
+    }
+});
+</script>
+{% endblock %}

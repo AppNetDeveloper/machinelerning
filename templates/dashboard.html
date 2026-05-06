@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Confecciones{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Dashboard</h2>
+    <p>Resumen del sistema de clasificacion</p>
+</div>
+
+<!-- Stats cards -->
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-number">{{ total_images }}</div>
+            <div class="stat-label">Imagenes totales</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-number">{{ dataset_stats|length }}</div>
+            <div class="stat-label">Clases</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-number">
+                {% if model_loaded %}
+                    <span style="color: var(--success);"><i class="bi bi-check-circle"></i></span>
+                {% else %}
+                    <span style="color: var(--danger);"><i class="bi bi-x-circle"></i></span>
+                {% endif %}
+            </div>
+            <div class="stat-label">
+                {% if model_loaded %}Modelo listo{% else %}Sin modelo{% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card">
+            <div class="stat-number">{{ recent_runs|length }}</div>
+            <div class="stat-label">Entrenamientos</div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- Clases del dataset -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-collection"></i> Dataset por Clase
+            </div>
+            <div class="card-body">
+                {% for class_name, count in dataset_stats.items() %}
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <strong>{{ class_name }}</strong>
+                        <div class="progress mt-1" style="width: 200px;">
+                            <div class="progress-bar" style="width: {{ (count / total_images * 100)|round }}%"></div>
+                        </div>
+                    </div>
+                    <span class="badge bg-secondary">{{ count }} imgs</span>
+                </div>
+                {% endfor %}
+                <a href="/dataset" class="btn btn-outline-light btn-sm mt-2">
+                    <i class="bi bi-images"></i> Ver Dataset
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ultimos entrenamientos -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-clock-history"></i> Ultimos Entrenamientos
+            </div>
+            <div class="card-body">
+                {% if recent_runs %}
+                    {% for run in recent_runs[:5] %}
+                    <div class="d-flex justify-content-between align-items-center mb-2 pb-2" style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                        <div>
+                            <span class="badge-status {{ run.status }}">{{ run.status }}</span>
+                            <small class="text-muted ms-2">{{ run.created_at }}</small>
+                        </div>
+                        <div>
+                            {% if run.best_val_acc %}
+                                <strong>{{ "%.1f"|format(run.best_val_acc) }}%</strong>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <p class="text-muted">Sin entrenamientos aun</p>
+                {% endif %}
+                <a href="/train" class="btn btn-accent btn-sm mt-2">
+                    <i class="bi bi-gpu-card"></i> Entrenar Modelo
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Clases disponibles -->
+{% if class_names %}
+<div class="card mt-4">
+    <div class="card-header">
+        <i class="bi bi-tags"></i> Clases del Modelo
+    </div>
+    <div class="card-body">
+        <div class="d-flex gap-2 flex-wrap">
+            {% for name in class_names %}
+            <span class="badge bg-dark px-3 py-2" style="font-size: 1rem;">{{ name }}</span>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if training_running %}
+<div class="alert alert-warning mt-4">
+    <i class="bi bi-hourglass-split"></i>
+    Hay un entrenamiento en progreso. <a href="/train" class="alert-link">Ver progreso</a>
+</div>
+{% endif %}
+{% endblock %}

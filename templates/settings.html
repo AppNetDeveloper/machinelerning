@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}Ajustes - Confecciones{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Ajustes del Sistema</h2>
+    <p>Gestiona usuarios, contrasenas y configuracion del servidor</p>
+</div>
+
+{% if success %}
+<div class="alert alert-success alert-dismissible fade show">
+    <i class="bi bi-check-circle"></i> {{ success }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-danger alert-dismissible fade show">
+    <i class="bi bi-exclamation-triangle"></i> {{ error }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="row g-4">
+    <!-- Usuarios -->
+    <div class="col-md-8">
+        <div class="card mb-4">
+            <div class="card-header"><i class="bi bi-people"></i> Usuarios Administradores</div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-dark">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Usuario</th>
+                                <th>Rol</th>
+                                <th>Creado</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for u in users %}
+                            <tr>
+                                <td>#{{ u.id }}</td>
+                                <td><strong>{{ u.username }}</strong></td>
+                                <td><span class="badge bg-secondary">{{ u.role }}</span></td>
+                                <td><small>{{ u.created_at }}</small></td>
+                                <td>
+                                    {% if u.username != user %}
+                                    <form method="POST" action="/settings/delete-user" style="display:inline;"
+                                          onsubmit="return confirm('Eliminar usuario {{ u.username }}?')">
+                                        <input type="hidden" name="username" value="{{ u.username }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </form>
+                                    {% else %}
+                                    <span class="text-muted small">Tu sesion</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cambiar contrasena -->
+        <div class="card mb-4">
+            <div class="card-header"><i class="bi bi-key"></i> Cambiar Contrasena</div>
+            <div class="card-body">
+                <form method="POST" action="/settings/change-password">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label">Usuario</label>
+                            <select name="username" class="form-select">
+                                {% for u in users %}
+                                <option value="{{ u.username }}" {% if u.username == user %}selected{% endif %}>
+                                    {{ u.username }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Nueva contrasena</label>
+                            <input type="password" name="new_password" class="form-control" 
+                                   minlength="4" required placeholder="Min 4 caracteres">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Confirmar</label>
+                            <input type="password" name="confirm_password" class="form-control" 
+                                   minlength="4" required placeholder="Repetir">
+                        </div>
+                        <div class="col-md-2 d-flex align-items-end">
+                            <button type="submit" class="btn btn-accent w-100">
+                                <i class="bi bi-check-lg"></i> Cambiar
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Anadir usuario -->
+        <div class="card">
+            <div class="card-header"><i class="bi bi-person-plus"></i> Anadir Usuario</div>
+            <div class="card-body">
+                <form method="POST" action="/settings/add-user">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label">Nuevo usuario</label>
+                            <input type="text" name="new_username" class="form-control" 
+                                   required placeholder="nombre_usuario" pattern="[a-zA-Z0-9_]+">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Contrasena</label>
+                            <input type="password" name="new_user_password" class="form-control" 
+                                   minlength="4" required placeholder="Min 4 caracteres">
+                        </div>
+                        <div class="col-md-4 d-flex align-items-end">
+                            <button type="submit" class="btn btn-outline-light w-100">
+                                <i class="bi bi-plus-circle"></i> Crear Usuario
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configuracion servidor -->
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header"><i class="bi bi-hdd-network"></i> Servidor</div>
+            <div class="card-body">
+                <form method="POST" action="/settings/save-server">
+                    <div class="mb-3">
+                        <label class="form-label">Host (IP de escucha)</label>
+                        <select name="host" class="form-select">
+                            <option value="0.0.0.0" {% if host == "0.0.0.0" %}selected{% endif %}>
+                                0.0.0.0 - Todas las interfaces (acceso externo)
+                            </option>
+                            <option value="127.0.0.1" {% if host == "127.0.0.1" %}selected{% endif %}>
+                                127.0.0.1 - Solo localhost (solo esta maquina)
+                            </option>
+                        </select>
+                        <small class="text-muted">
+                            <i class="bi bi-info-circle"></i>
+                            0.0.0.0 permite acceso desde otros dispositivos en la red
+                        </small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Puerto</label>
+                        <input type="number" name="port" class="form-control" 
+                               value="{{ port }}" min="1024" max="65535" required>
+                        <small class="text-muted">Puerto TCP (1024-65535)</small>
+                    </div>
+                    <button type="submit" class="btn btn-accent w-100">
+                        <i class="bi bi-save"></i> Guardar Configuracion
+                    </button>
+                    <p class="text-muted small mt-2 mb-0">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        Requiere reiniciar el servidor para aplicar los cambios
+                    </p>
+                </form>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><i class="bi bi-info-circle"></i> Info del Sistema</div>
+            <div class="card-body">
+                <table class="table table-sm table-dark mb-0">
+                    <tr><td>Version</td><td class="text-end">3.0.0</td></tr>
+                    <tr><td>Host actual</td><td class="text-end"><code>{{ host }}</code></td></tr>
+                    <tr><td>Puerto actual</td><td class="text-end"><code>{{ port }}</code></td></tr>
+                    <tr><td>Usuarios</td><td class="text-end">{{ users|length }}</td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

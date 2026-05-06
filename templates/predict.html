@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Probar Modelo - Confecciones{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Probar Modelo</h2>
+    <p>Sube una foto para ver que confeccion detecta el modelo</p>
+</div>
+
+{% if not model_loaded %}
+<div class="alert alert-danger">
+    <i class="bi bi-exclamation-triangle"></i>
+    No hay modelo cargado. <a href="/train" class="alert-link">Entrena primero</a> para poder hacer predicciones.
+</div>
+{% endif %}
+
+<div class="row g-4">
+    <!-- Upload area -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-camera"></i> Subir Imagen</div>
+            <div class="card-body">
+                <form method="POST" action="/predict" enctype="multipart/form-data" id="predictForm">
+                    <div class="dropzone" id="predictDropzone">
+                        <div class="icon"><i class="bi bi-image"></i></div>
+                        <p class="mb-1">Arrastra una foto aqui</p>
+                        <small class="text-muted">o haz clic para seleccionar</small>
+                    </div>
+                    <input type="file" name="file" id="predictFile" accept="image/*" required style="display:none;">
+
+                    <div class="mt-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" name="use_tta" value="true"
+                                   id="useTta" checked>
+                            <label class="form-check-label" for="useTta">
+                                Usar TTA (Test-Time Augmentation) - mas preciso pero mas lento
+                            </label>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-accent w-100 mt-3 py-2" id="predictBtn"
+                            {% if not model_loaded %}disabled{% endif %}>
+                        <i class="bi bi-search"></i> Clasificar Imagen
+                    </button>
+                </form>
+
+                <!-- Preview -->
+                <div id="imagePreview" class="mt-3" style="display:none;">
+                    <img id="previewImg" class="img-fluid rounded" style="max-height: 300px;">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Result area -->
+    <div class="col-md-6">
+        {% if error %}
+        <div class="alert alert-danger">
+            <i class="bi bi-exclamation-triangle"></i> {{ error }}
+        </div>
+        {% endif %}
+
+        {% if result %}
+        <div class="prediction-result">
+            <div class="text-center mb-4">
+                <div class="class-name">{{ result.confeccion }}</div>
+                <div class="confidence" style="color: {% if result.confianza >= 80 %}var(--success){% elif result.confianza >= 50 %}var(--warning){% else %}var(--danger){% endif %}">
+                    {{ result.confianza }}%
+                </div>
+                <span class="badge-status {% if result.confiable %}completed{% else %}error{% endif %}">
+                    {% if result.confiable %}Confiable{% else %}Baja confianza{% endif %}
+                </span>
+                {% if result.tta %}
+                <span class="badge bg-secondary ms-2">TTA activado</span>
+                {% endif %}
+            </div>
+
+            <h6 class="mb-3">Probabilidades por clase:</h6>
+            {% for class_name, prob in result.probabilidades.items() %}
+            <div class="prob-bar">
+                <div class="label">{{ class_name }}</div>
+                <div class="bar">
+                    <div class="bar-fill {% if loop.first %}top{% else %}other{% endif %}"
+                         style="width: {{ prob }}%">
+                        {{ prob }}%
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+
+            <hr style="border-color: rgba(255,255,255,0.1);">
+            <small class="text-muted">
+                <i class="bi bi-info-circle"></i>
+                Imagen: {{ filename }} | Umbrales: confiable >= 50%
+            </small>
+        </div>
+        {% else %}
+        <div class="card">
+            <div class="card-body text-center py-5" style="color: var(--text-muted);">
+                <i class="bi bi-arrow-left" style="font-size: 2rem;"></i>
+                <p class="mt-2">Sube una imagen para ver la prediccion aqui</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Clases disponibles -->
+{% if class_names %}
+<div class="card mt-4">
+    <div class="card-header"><i class="bi bi-tags"></i> Clases del Modelo</div>
+    <div class="card-body">
+        <div class="d-flex gap-2 flex-wrap">
+            {% for name in class_names %}
+            <span class="badge bg-dark px-3 py-2">{{ name }}</span>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const dropzone = document.getElementById('predictDropzone');
+const fileInput = document.getElementById('predictFile');
+const preview = document.getElementById('imagePreview');
+const previewImg = document.getElementById('previewImg');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+    fileInput.files = e.dataTransfer.files;
+    showPreview(e.dataTransfer.files[0]);
+});
+
+fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) showPreview(fileInput.files[0]);
+});
+
+function showPreview(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        previewImg.src = e.target.result;
+        preview.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+}
+</script>
+{% endblock %}

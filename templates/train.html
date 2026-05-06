@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Entrenar - Confecciones{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Entrenamiento del Modelo</h2>
+    <p>Configura y ejecuta el entrenamiento de ResNet50</p>
+</div>
+
+<div class="row g-4">
+    <!-- Control panel -->
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header"><i class="bi bi-sliders"></i> Configuracion</div>
+            <div class="card-body">
+                <table class="table table-dark table-sm">
+                    <tr><td>Fase 1 (cabeza)</td><td class="text-end">15 epocas</td></tr>
+                    <tr><td>Fase 2 (fine-tune)</td><td class="text-end">40 epocas</td></tr>
+                    <tr><td>Batch size</td><td class="text-end">16</td></tr>
+                    <tr><td>LR cabeza</td><td class="text-end">0.001</td></tr>
+                    <tr><td>LR fine-tune</td><td class="text-end">0.00005</td></tr>
+                    <tr><td>Early stopping</td><td class="text-end">8 epocas</td></tr>
+                    <tr><td>Label smoothing</td><td class="text-end">0.1</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><i class="bi bi-play-circle"></i> Acciones</div>
+            <div class="card-body">
+                {% if training_state.running %}
+                <div class="alert alert-warning">
+                    <i class="bi bi-hourglass-split"></i> Entrenamiento en curso...
+                </div>
+                <div class="progress mb-2">
+                    <div class="progress-bar" id="progressBar"
+                         style="width: {{ (training_state.current_epoch / training_state.total_epochs * 100) if training_state.total_epochs > 0 else 0 }}%">
+                    </div>
+                </div>
+                <small class="text-muted">
+                    Epoca {{ training_state.current_epoch }} / {{ training_state.total_epochs }}
+                    | Mejor val acc: {{ "%.1f"|format(training_state.best_val_acc) }}%
+                </small>
+                {% else %}
+                <form method="POST" action="/train/start">
+                    <button type="submit" class="btn btn-accent w-100 py-3"
+                            onclick="return confirm('Iniciar entrenamiento? Esto puede tardar varios minutos.')">
+                        <i class="bi bi-gpu-card"></i> Iniciar Entrenamiento
+                    </button>
+                </form>
+                <p class="text-muted small mt-2 mb-0">
+                    <i class="bi bi-info-circle"></i>
+                    El entrenamiento usa 2 fases: primero entrena la capa clasificadora,
+                    luego hace fine-tuning de las ultimas capas de ResNet50.
+                </p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Training log -->
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between">
+                <span><i class="bi bi-terminal"></i> Log de Entrenamiento</span>
+                <span class="badge-status {% if training_state.running %}running{% else %}pending{% endif %}">
+                    {% if training_state.running %}En curso{% else %}Inactivo{% endif %}
+                </span>
+            </div>
+            <div class="card-body">
+                <div class="train-log" id="trainLog">
+                    {% if training_state.progress %}
+                        {% for p in training_state.progress %}
+                        <div class="log-line {{ p.get('phase', '') }}">
+                            {{ p.get('message', '') }}
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                    <div class="log-line" style="color: var(--text-muted);">
+                        El log del entrenamiento aparecera aqui en tiempo real...
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Model info -->
+        <div class="card mt-4">
+            <div class="card-header"><i class="bi bi-cpu"></i> Info del Modelo</div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <p><strong>Arquitectura:</strong> ResNet50 (pretrained ImageNet)</p>
+                        <p><strong>Transfer Learning:</strong> 2 fases (cabeza -> fine-tune L3+L4)</p>
+                        <p><strong>TTA:</strong> 7 augmentaciones por prediccion</p>
+                    </div>
+                    <div class="col-md-6">
+                        <p><strong>Estado:</strong>
+                            {% if model_loaded %}
+                                <span class="text-success"><i class="bi bi-check-circle"></i> Cargado</span>
+                            {% else %}
+                                <span class="text-danger"><i class="bi bi-x-circle"></i> No cargado</span>
+                            {% endif %}
+                        </p>
+                        <p><strong>Augmentacion:</strong> Flip, Rotation, Perspective, ColorJitter, Erasing</p>
+                        <p><strong>Weighted Sampling:</strong> Activo para balancear clases</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+{% if training_state.running %}
+// SSE para progreso en tiempo real
+const log = document.getElementById('trainLog');
+const progressBar = document.getElementById('progressBar');
+const evtSource = new EventSource('/train/progress');
+
+evtSource.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+
+    if (data.message === '[DONE]') {
+        evtSource.close();
+        setTimeout(() => location.reload(), 1000);
+        return;
+    }
+
+    const line = document.createElement('div');
+    line.className = 'log-line ' + (data.phase || '');
+    line.textContent = data.message;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+
+    if (data.total_epochs > 0) {
+        const pct = (data.epoch / data.total_epochs * 100);
+        progressBar.style.width = pct + '%';
+    }
+};
+
+evtSource.onerror = function() {
+    evtSource.close();
+};
+{% endif %}
+
+// Auto-scroll log
+const logEl = document.getElementById('trainLog');
+logEl.scrollTop = logEl.scrollHeight;
+</script>
+{% endblock %}

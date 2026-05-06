@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Panel de Confecciones{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="/static/style.css" rel="stylesheet">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <!-- Sidebar -->
+    <nav class="sidebar">
+        <div class="brand">
+            <h4><i class="bi bi-box-seam"></i> Confecciones</h4>
+            <small>Clasificador de Frutas v3.0</small>
+        </div>
+
+        <a href="/" class="nav-link {% if request.url.path == '/' %}active{% endif %}">
+            <span class="icon"><i class="bi bi-speedometer2"></i></span>
+            Dashboard
+        </a>
+        <a href="/dataset" class="nav-link {% if request.url.path == '/dataset' %}active{% endif %}">
+            <span class="icon"><i class="bi bi-images"></i></span>
+            Dataset
+        </a>
+        <a href="/train" class="nav-link {% if request.url.path == '/train' %}active{% endif %}">
+            <span class="icon"><i class="bi bi-gpu-card"></i></span>
+            Entrenar
+        </a>
+        <a href="/predict" class="nav-link {% if request.url.path == '/predict' %}active{% endif %}">
+            <span class="icon"><i class="bi bi-search"></i></span>
+            Probar Modelo
+        </a>
+        <a href="/history" class="nav-link {% if request.url.path == '/history' %}active{% endif %}">
+            <span class="icon"><i class="bi bi-clock-history"></i></span>
+            Historial
+        </a>
+        <a href="/api-docs" class="nav-link {% if request.url.path == '/api-docs' %}active{% endif %}">
+            <span class="icon"><i class="bi bi-braces"></i></span>
+            API Docs
+        </a>
+        <a href="/settings" class="nav-link {% if request.url.path == '/settings' %}active{% endif %}">
+            <span class="icon"><i class="bi bi-gear"></i></span>
+            Ajustes
+        </a>
+
+        <div class="user-info">
+            <i class="bi bi-person-circle"></i> {{ user }}
+            <a href="/logout" class="float-end text-decoration-none" style="color: var(--accent);">
+                <i class="bi bi-box-arrow-right"></i>
+            </a>
+        </div>
+    </nav>
+
+    <!-- Main content -->
+    <div class="main-content">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
