@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}API Docs - Confecciones{% endblock %}
+{% block title %}Documentacion API - Confecciones{% endblock %}
 
 {% block content %}
 <div class="page-header">
@@ -10,7 +10,7 @@
 <!-- Base URL -->
 <div class="alert alert-info mb-4">
     <strong>Base URL:</strong> <code>http://localhost:8000/api</code><br>
-    <strong>Formato:</strong> JSON | <strong>Auth:</strong> No requerida para endpoints /api
+    <strong>Formato:</strong> JSON | <strong>Autenticacion:</strong> No requerida para endpoints /api
 </div>
 
 <!-- Endpoints -->
@@ -170,17 +170,17 @@ curl -X POST http://localhost:8000/api/predecir-lote \
 </div>
 
 <!-- Trigger API -->
-<h4 class="mt-4 mb-3" style="color:var(--accent);"><i class="bi bi-lightning"></i> API Trigger / Sensor</h4>
+<h4 class="mt-4 mb-3" style="color:var(--accent);"><i class="bi bi-lightning"></i> API Disparador / Sensor</h4>
 
 <div class="api-endpoint">
     <span class="method post">POST</span>
     <span class="path">/api/disparar</span>
     <div class="description">
         Endpoint para sensores externos. Captura foto de la camara por defecto, ejecuta clasificacion ML + deteccion QR.
-        Sin autenticacion. Configure la camara y callback en <a href="/settings" style="color:var(--accent);">Ajustes</a>.
+        Sin autenticacion. Configure la camara y retorno en <a href="/settings" style="color:var(--accent);">Ajustes</a>.
     </div>
     <details class="mt-2">
-        <summary class="text-muted" style="cursor:pointer;">Ver respuesta (sin callback)</summary>
+        <summary class="text-muted" style="cursor:pointer;">Ver respuesta (sin retorno)</summary>
         <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>{
   "timestamp": "2026-05-06T23:30:00",
   "camera": "usb_0",
@@ -196,7 +196,7 @@ curl -X POST http://localhost:8000/api/predecir-lote \
 }</code></pre>
     </details>
     <details class="mt-2">
-        <summary class="text-muted" style="cursor:pointer;">Ver respuesta (con callback activo)</summary>
+        <summary class="text-muted" style="cursor:pointer;">Ver respuesta (con retorno activo)</summary>
         <pre class="mt-2" style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;"><code>{
   "status": "processing",
   "callback": true,

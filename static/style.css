@@ -469,3 +469,50 @@ body {
     border-radius: 4px;
     font-size: 0.85rem;
 }
+
+/* ─── Dark theme overrides for Bootstrap ─────────────────────── */
+/* Override Bootstrap .text-muted to use our readable muted color */
+.text-muted {
+    color: var(--text-muted) !important;
+}
+
+/* Fix bg-dark badges that are invisible on dark backgrounds */
+.badge.bg-dark {
+    background-color: var(--bg-sidebar) !important;
+}
+
+/* Improve bg-secondary badge visibility */
+.badge.bg-secondary {
+    background-color: #4a5568 !important;
+}
+
+/* Ensure form labels are always visible */
+.form-label {
+    color: var(--text-light);
+}
+
+/* Better placeholder contrast */
+.form-control::placeholder {
+    color: rgba(255,255,255,0.45);
+}
+
+/* Alert text visibility on dark theme */
+.alert-warning {
+    color: #1a1a2e;
+}
+.alert-info {
+    color: #1a1a2e;
+}
+
+/* Small text helper */
+small.text-muted, .small.text-muted {
+    color: var(--text-muted) !important;
+}
+
+/* Summary elements in API docs */
+details summary.text-muted {
+    color: var(--text-muted) !important;
+}
+details summary.text-muted:hover {
+    color: var(--text-light) !important;
+}

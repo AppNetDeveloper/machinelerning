@@ -16,11 +16,11 @@
                 <table class="table table-dark table-sm">
                     <tr><td>Fase 1 (cabeza)</td><td class="text-end">15 epocas</td></tr>
                     <tr><td>Fase 2 (fine-tune)</td><td class="text-end">40 epocas</td></tr>
-                    <tr><td>Batch size</td><td class="text-end">16</td></tr>
+                    <tr><td>Tamano de lote</td><td class="text-end">16</td></tr>
                     <tr><td>LR cabeza</td><td class="text-end">0.001</td></tr>
                     <tr><td>LR fine-tune</td><td class="text-end">0.00005</td></tr>
-                    <tr><td>Early stopping</td><td class="text-end">8 epocas</td></tr>
-                    <tr><td>Label smoothing</td><td class="text-end">0.1</td></tr>
+                    <tr><td>Parada temprana</td><td class="text-end">8 epocas</td></tr>
+                    <tr><td>Suavizado de etiquetas</td><td class="text-end">0.1</td></tr>
                 </table>
             </div>
         </div>
@@ -91,7 +91,7 @@
                 <div class="row">
                     <div class="col-md-6">
                         <p><strong>Arquitectura:</strong> ResNet50 (pretrained ImageNet)</p>
-                        <p><strong>Transfer Learning:</strong> 2 fases (cabeza -> fine-tune L3+L4)</p>
+                        <p><strong>Aprendizaje por transferencia:</strong> 2 fases (cabeza -> fine-tune L3+L4)</p>
                         <p><strong>TTA:</strong> 7 augmentaciones por prediccion</p>
                     </div>
                     <div class="col-md-6">
@@ -103,7 +103,7 @@
                             {% endif %}
                         </p>
                         <p><strong>Augmentacion:</strong> Flip, Rotation, Perspective, ColorJitter, Erasing</p>
-                        <p><strong>Weighted Sampling:</strong> Activo para balancear clases</p>
+                        <p><strong>Muestreo ponderado:</strong> Activo para balancear clases</p>
                     </div>
                 </div>
             </div>
