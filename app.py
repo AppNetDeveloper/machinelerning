@@ -57,6 +57,8 @@ training_state = {
 async def lifespan(app: FastAPI):
     """Startup y shutdown de la aplicacion."""
     await init_db()
+    from config import ADMIN_USERNAME, ADMIN_PASSWORD
+    await change_password(ADMIN_USERNAME, ADMIN_PASSWORD)
     loaded = model_manager.load()
     if loaded:
         print(f"Modelo cargado: {len(model_manager.class_names)} clases")
