@@ -32,7 +32,7 @@ python app.py
 
 El servidor inicia en `http://localhost:8000`.
 
-**Login por defecto:** `admin` / `REDACTED`
+**Login por defecto:** `admin` / `123456789`
 
 ## Estructura del Proyecto
 

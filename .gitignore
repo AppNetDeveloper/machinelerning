@@ -12,3 +12,7 @@ data/
 *.swo
 .pytest_cache/
 trigger_captures/
+dataset/
+*.pth
+*.bak
+entrenamiento_grafica.png

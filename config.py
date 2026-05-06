@@ -30,7 +30,7 @@ EARLY_STOP_PATIENCE = 8
 
 # ─── Admin por defecto ──────────────────────────────────────────
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "REDACTED"
+ADMIN_PASSWORD = "123456789"
 SECRET_KEY = "confecciones-frutas-secret-key-2026"
 
 # ─── Servidor ────────────────────────────────────────────────────

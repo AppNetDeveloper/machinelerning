@@ -6,7 +6,7 @@ Uso:
     python app.py
 
 Accede a: http://localhost:8000
-Acceso: admin / REDACTED
+Acceso: admin / 123456789
 """
 
 import io
@@ -971,6 +971,6 @@ if __name__ == "__main__":
     print("="*50)
     print("  Panel de Confecciones de Frutas v3.0")
     print(f"  http://localhost:{PORT}")
-    print("  Acceso: admin / REDACTED")
+    print("  Acceso: admin / 123456789")
     print("="*50)
     uvicorn.run(app, host=HOST, port=PORT)

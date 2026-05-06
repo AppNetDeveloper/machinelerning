@@ -16,10 +16,26 @@ class CameraManager:
     """Gestor de camaras USB e IP."""
 
     def __init__(self):
-        self.cameras = {}  # id -> {"type": "usb"|"ip", "source": ..., "name": ...}
+        self.cameras = {}  # str(id) -> {"id": str, "type": "usb"|"ip", "source": ..., "name": ..., "slug": ...}
         self._active_captures = {}  # camera_id -> VideoCapture
         self._lock = threading.Lock()
-        self._next_id = 1
+
+    async def init_from_db(self):
+        """Carga camaras desde la BD al iniciar el servidor."""
+        from database import get_all_cameras
+        db_cameras = await get_all_cameras()
+        for cam in db_cameras:
+            cam_id = str(cam["id"])
+            self.cameras[cam_id] = {
+                "id": cam_id,
+                "type": cam["camera_type"],
+                "source": int(cam["source"]) if cam["camera_type"] == "usb" else cam["source"],
+                "name": cam["name"],
+                "slug": cam["slug"],
+                "resolution": cam.get("resolution", ""),
+                "callback_url": cam.get("callback_url", ""),
+                "callback_active": cam.get("callback_active", "false"),
+            }
 
     def scan_usb_cameras(self) -> list[dict]:
         """Escanea camaras USB conectadas al servidor."""

@@ -7,6 +7,8 @@ import aiosqlite
 import hashlib
 import os
 import json
+import re
+import unicodedata
 from datetime import datetime
 from config import DB_PATH, ADMIN_USERNAME, ADMIN_PASSWORD
 
@@ -68,6 +70,18 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS cameras (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                camera_type TEXT NOT NULL,
+                source TEXT NOT NULL,
+                resolution TEXT DEFAULT '',
+                callback_url TEXT DEFAULT '',
+                callback_active TEXT DEFAULT 'false',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
 
@@ -282,9 +296,105 @@ async def set_setting(key: str, value: str):
 
 
 async def get_trigger_settings() -> dict:
-    """Obtiene todas las configuraciones de trigger."""
+    """Obtiene todas las configuraciones de trigger (legacy)."""
     return {
         "default_camera": await get_setting("default_camera") or "",
         "callback_url": await get_setting("callback_url") or "",
         "callback_active": await get_setting("callback_active") or "false",
     }
+
+
+def _make_slug(name: str) -> str:
+    """Genera un slug URL-safe a partir de un nombre.
+    'Camara Almacen' -> 'camara-almacen'
+    'Cámara Línea 1' -> 'camara-linea-1'
+    """
+    # Normalizar y quitar acentos
+    nfkd = unicodedata.normalize('NFKD', name)
+    ascii_name = ''.join(c for c in nfkd if not unicodedata.combining(c))
+    # Minusculas, reemplazar no-alfanumericos con guiones
+    slug = re.sub(r'[^a-z0-9]+', '-', ascii_name.lower()).strip('-')
+    # Colapsar guiones multiples
+    slug = re.sub(r'-+', '-', slug)
+    return slug or 'camara'
+
+
+async def create_camera(name: str, camera_type: str, source: str,
+                        resolution: str = '', callback_url: str = '',
+                        callback_active: str = 'false') -> dict:
+    """Crea una camara en la BD. Retorna el dict de la camara creada."""
+    base_slug = _make_slug(name)
+    slug = base_slug
+    # Asegurar slug unico
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        counter = 1
+        while True:
+            cursor = await db.execute("SELECT id FROM cameras WHERE slug = ?", (slug,))
+            if not await cursor.fetchone():
+                break
+            counter += 1
+            slug = f"{base_slug}-{counter}"
+
+        cursor = await db.execute("""
+            INSERT INTO cameras (slug, name, camera_type, source, resolution, callback_url, callback_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (slug, name, camera_type, source, resolution, callback_url, callback_active))
+        await db.commit()
+        cam_id = cursor.lastrowid
+
+    return {
+        "id": cam_id, "slug": slug, "name": name, "camera_type": camera_type,
+        "source": source, "resolution": resolution,
+        "callback_url": callback_url, "callback_active": callback_active,
+    }
+
+
+async def get_camera_by_slug(slug: str) -> dict | None:
+    """Busca una camara por su slug."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM cameras WHERE slug = ?", (slug,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def get_camera_by_id(cam_id: int) -> dict | None:
+    """Busca una camara por su ID."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM cameras WHERE id = ?", (cam_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def get_all_cameras() -> list[dict]:
+    """Retorna todas las camaras registradas."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM cameras ORDER BY id")
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def update_camera_db(cam_id: int, **fields) -> bool:
+    """Actualiza campos especificos de una camara."""
+    if not fields:
+        return False
+    allowed = {'slug', 'name', 'camera_type', 'source', 'resolution', 'callback_url', 'callback_active'}
+    filtered = {k: v for k, v in fields.items() if k in allowed}
+    if not filtered:
+        return False
+    sets = ', '.join(f"{k} = ?" for k in filtered)
+    values = list(filtered.values()) + [cam_id]
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute(f"UPDATE cameras SET {sets} WHERE id = ?", values)
+        await db.commit()
+    return True
+
+
+async def delete_camera_db(cam_id: int) -> bool:
+    """Elimina una camara de la BD."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute("DELETE FROM cameras WHERE id = ?", (cam_id,))
+        await db.commit()
+        return cursor.rowcount > 0
