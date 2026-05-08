@@ -11,6 +11,7 @@ from torchvision import transforms, models
 from PIL import Image
 from pathlib import Path
 from config import MODEL_PATH, CLASES_PATH, IMG_SIZE, TTA_AUGMENTATIONS
+from train import create_fc_head
 
 
 class ModelManager:
@@ -59,7 +60,7 @@ class ModelManager:
             ]),
             transforms.Compose([
                 transforms.Resize((IMG_SIZE, IMG_SIZE)),
-                transforms.ColorJitter(brightness=0.8),
+                transforms.ColorJitter(brightness=0.4),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]),
@@ -82,14 +83,7 @@ class ModelManager:
 
             num_classes = len(self.class_names)
             self.model = models.resnet50(weights=None)
-            num_features = self.model.fc.in_features
-            self.model.fc = nn.Sequential(
-                nn.Dropout(0.3),
-                nn.Linear(num_features, 256),
-                nn.ReLU(),
-                nn.Dropout(0.2),
-                nn.Linear(256, num_classes),
-            )
+            self.model.fc = create_fc_head(self.model.fc.in_features, num_classes)
 
             self.model.load_state_dict(
                 torch.load(str(MODEL_PATH), map_location="cpu", weights_only=True)

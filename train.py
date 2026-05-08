@@ -26,11 +26,33 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+import numpy as np
 from config import (
     DATASET_DIR, MODEL_PATH, CLASES_PATH, IMG_SIZE, BATCH_SIZE,
     EPOCHS_HEAD, EPOCHS_FINETUNE, LR_HEAD, LR_FINETUNE,
     VALIDATION_SPLIT, LABEL_SMOOTHING, EARLY_STOP_PATIENCE,
+    WEIGHT_DECAY, MIXUP_ALPHA,
 )
+
+
+def create_fc_head(num_features=2048, num_classes=3):
+    """Cabeza FC compartida entre entrenamiento e inferencia."""
+    return nn.Sequential(
+        nn.Dropout(0.3), nn.Linear(num_features, 256),
+        nn.ReLU(), nn.Dropout(0.2), nn.Linear(256, num_classes),
+    )
+
+
+def mixup_data(images, labels, alpha=MIXUP_ALPHA):
+    """Aplica MixUp: mezcla pares de imágenes para crear ejemplos virtuales."""
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1.0
+    batch_size = images.size(0)
+    index = torch.randperm(batch_size, device=images.device)
+    mixed_images = lam * images + (1 - lam) * images[index]
+    return mixed_images, labels, labels[index], lam
 
 
 def get_transforms():
@@ -42,6 +64,7 @@ def get_transforms():
         transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
         transforms.RandomPerspective(distortion_scale=0.2, p=0.3),
         transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05),
+        transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         transforms.RandomErasing(p=0.2, scale=(0.02, 0.15)),
@@ -54,7 +77,35 @@ def get_transforms():
     return train_transform, val_transform
 
 
+def clean_empty_classes(dataset_dir):
+    """Elimina carpetas de clases sin imágenes válidas."""
+    valid_ext = {'.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp'}
+    dataset_path = Path(dataset_dir)
+    removed = []
+    for class_dir in sorted(dataset_path.iterdir()):
+        if not class_dir.is_dir():
+            continue
+        images = [f for f in class_dir.iterdir() if f.suffix.lower() in valid_ext]
+        if not images:
+            class_dir.rmdir()
+            removed.append(class_dir.name)
+    if removed:
+        print(f"Clases vacias eliminadas: {removed}")
+
+
 def load_dataset(dataset_dir, train_transform, val_transform):
+    clean_empty_classes(dataset_dir)
+    # Verificar que queden clases con imágenes
+    valid_ext = {'.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp'}
+    dataset_path = Path(dataset_dir)
+    valid_classes = [d.name for d in sorted(dataset_path.iterdir())
+                     if d.is_dir() and any(f.suffix.lower() in valid_ext for f in d.iterdir())]
+    if len(valid_classes) < 2:
+        raise ValueError(
+            f"Se necesitan al menos 2 clases con imagenes. "
+            f"Clases encontradas: {valid_classes}. "
+            f"Sube imagenes desde el panel web antes de entrenar."
+        )
     full_dataset = datasets.ImageFolder(root=dataset_dir, transform=train_transform)
     class_names = full_dataset.classes
     num_classes = len(class_names)
@@ -91,11 +142,7 @@ def create_model(num_classes):
     model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
     for param in model.parameters():
         param.requires_grad = False
-    num_features = model.fc.in_features
-    model.fc = nn.Sequential(
-        nn.Dropout(0.3), nn.Linear(num_features, 256),
-        nn.ReLU(), nn.Dropout(0.2), nn.Linear(256, num_classes),
-    )
+    model.fc = create_fc_head(model.fc.in_features, num_classes)
     for param in model.fc.parameters():
         param.requires_grad = True
     return model
@@ -109,7 +156,7 @@ def unfreeze_layers(model):
     total = sum(p.numel() for p in model.parameters())
     print(f"  Parametros entrenables: {trainable:,} / {total:,} ({100*trainable/total:.1f}%)")
 
-def train_epoch(model, train_loader, criterion, optimizer, device):
+def train_epoch(model, train_loader, criterion, optimizer, device, use_mixup=True):
     model.train()
     running_loss = 0.0
     correct = 0
@@ -117,8 +164,13 @@ def train_epoch(model, train_loader, criterion, optimizer, device):
     for images, labels in train_loader:
         images, labels = images.to(device), labels.to(device)
         optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
+        if use_mixup:
+            mixed_images, labels_a, labels_b, lam = mixup_data(images, labels)
+            outputs = model(mixed_images)
+            loss = lam * criterion(outputs, labels_a) + (1 - lam) * criterion(outputs, labels_b)
+        else:
+            outputs = model(images)
+            loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
@@ -185,7 +237,6 @@ def run_training_sync(progress_callback=None):
         str(DATASET_DIR), train_transform, val_transform
     )
     model = create_model(num_classes).to(device)
-    criterion = nn.CrossEntropyLoss()
     best_val_acc = 0.0
     epochs_no_improve = 0
     history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": [], "lr": [], "phase": []}
@@ -193,7 +244,8 @@ def run_training_sync(progress_callback=None):
 
     # FASE 1
     report(f"FASE 1: Entrenando capa clasificadora ({EPOCHS_HEAD} epocas)", phase="phase1")
-    optimizer = optim.Adam(model.fc.parameters(), lr=LR_HEAD)
+    criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
+    optimizer = optim.AdamW(model.fc.parameters(), lr=LR_HEAD, weight_decay=WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5)
 
     for epoch in range(EPOCHS_HEAD):
@@ -211,6 +263,10 @@ def run_training_sync(progress_callback=None):
         else:
             epochs_no_improve += 1
 
+        if epochs_no_improve >= 4:
+            report(f"Early stopping Fase 1 en epoca {epoch+1}", phase="early_stop", epoch=epoch+1, total_epochs=total_epochs)
+            break
+
         cont = report(
             f"Epoca {epoch+1:3d}/{total_epochs} | Train Loss: {train_loss:.4f} Acc: {train_acc:.1f}% | Val Loss: {val_loss:.4f} Acc: {val_acc:.1f}% | LR: {lr:.6f}",
             phase="phase1", epoch=epoch+1, total_epochs=total_epochs,
@@ -223,7 +279,7 @@ def run_training_sync(progress_callback=None):
     report(f"FASE 2: Fine-tuning layer3+4 ({EPOCHS_FINETUNE} epocas)", phase="phase2")
     unfreeze_layers(model)
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
-    optimizer_ft = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=LR_FINETUNE)
+    optimizer_ft = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=LR_FINETUNE, weight_decay=WEIGHT_DECAY)
     scheduler_ft = optim.lr_scheduler.CosineAnnealingLR(optimizer_ft, T_max=EPOCHS_FINETUNE, eta_min=1e-7)
 
     for epoch in range(EPOCHS_FINETUNE):
