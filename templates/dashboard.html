@@ -56,7 +56,7 @@
                     <div>
                         <strong>{{ class_name }}</strong>
                         <div class="progress mt-1" style="width: 200px;">
-                            <div class="progress-bar" style="width: {{ (count / total_images * 100)|round }}%"></div>
+                            <div class="progress-bar" style="width: {{ (count / total_images * 100)|round if total_images else 0 }}%"></div>
                         </div>
                     </div>
                     <span class="badge bg-secondary">{{ count }} imgs</span>

@@ -166,7 +166,7 @@
             </div>
         </div>
 
-        <!-- Trigger info -->
+        <!-- Trigger API Key -->
         <div class="card mb-4">
             <div class="card-header"><i class="bi bi-lightning"></i> Disparador / Sensor</div>
             <div class="card-body">
@@ -175,7 +175,18 @@
                     Cada camara registrada tiene su propio endpoint API y callback.
                     Configuralo en la pagina de <a href="/camera" style="color:var(--accent);">Camara</a>.
                 </p>
-                <code class="small">POST /api/disparar/&lt;slug&gt;</code>
+                <code class="small d-block mb-3">POST /api/disparar/&lt;slug&gt;</code>
+                <form method="POST" action="/settings/save-trigger-key">
+                    <div class="mb-2">
+                        <label class="form-label">API Key para triggers</label>
+                        <input type="text" name="trigger_api_key" class="form-control"
+                               value="{{ trigger_api_key }}" placeholder="Dejar vacio = sin proteccion">
+                        <small class="text-muted">Si se configura, los sensores deben enviar <code>X-API-Key</code></small>
+                    </div>
+                    <button type="submit" class="btn btn-outline-light btn-sm w-100">
+                        <i class="bi bi-shield-lock"></i> Guardar API Key
+                    </button>
+                </form>
             </div>
         </div>
 

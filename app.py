@@ -1,6 +1,6 @@
 """
 Panel web para gestionar el sistema de clasificacion de confecciones de frutas.
-Incluye: login, dashboard, gestion de dataset, entrenamiento, predicciones y API docs.
+Punto de entrada principal que monta todos los routers.
 
 Uso:
     python app.py
@@ -9,61 +9,41 @@ Accede a: http://localhost:8000
 Acceso: admin / 123456789
 """
 
-import io
 import json
-import asyncio
-import shutil
-import cv2
-import numpy as np
-import uuid
-from pathlib import Path
-from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, Depends
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from PIL import Image
 
 from config import (
-    DATASET_DIR, MODEL_PATH, CLASES_PATH, STATIC_DIR, TEMPLATES_DIR,
-    HOST, PORT, CONFIDENCE_THRESHOLD, IMG_SIZE,
-    EPOCHS_HEAD, EPOCHS_FINETUNE, LR_HEAD, LR_FINETUNE,
-    BATCH_SIZE, EARLY_STOP_PATIENCE, LABEL_SMOOTHING, WARMUP_EPOCHS,
+    DATASET_DIR, STATIC_DIR,
+    get_host, get_port,
 )
-from database import (
-    init_db, save_training_run, get_training_runs, get_training_run,
-    save_prediction, get_predictions, get_dataset_stats,
-    get_all_users, add_user, change_password, delete_user,
-    save_qr_scan, get_qr_scans, get_setting, set_setting, get_trigger_settings,
-    create_camera, get_camera_by_slug, get_all_cameras, update_camera_db, delete_camera_db,
-    create_mqtt_trigger, get_all_mqtt_triggers_async, delete_mqtt_trigger_db,
-)
-from auth import authenticate, get_current_user, require_auth
+from database import init_db, change_password, get_camera_by_id
+from auth import get_current_user, get_csrf_token, verify_csrf
 from ml_model import model_manager
 from camera import camera_manager
 from mqtt_manager import mqtt_manager
 
-
-# ─── Estado global del entrenamiento ─────────────────────────────
-training_state = {
-    "running": False,
-    "progress": [],
-    "current_epoch": 0,
-    "total_epochs": 0,
-    "best_val_acc": 0.0,
-    "run_id": None,
-}
+from routers.auth import router as auth_router
+from routers.pages import router as pages_router
+from routers.dataset import router as dataset_router
+from routers.training import router as training_router
+from routers.predictions import router as predictions_router
+from routers.settings import router as settings_router
+from routers.cameras import router as cameras_router
+from routers.api import router as api_router
+from routers.mqtt import router as mqtt_router
 
 
 def _mqtt_trigger_sync(camera_id):
     """Callback sincrono para triggers MQTT (ejecutado en hilo daemon)."""
     import asyncio
-    from database import get_camera_by_id as _get_cam_sync
 
     async def _do_trigger():
-        cam = await _get_cam_sync(int(camera_id))
+        from routers.api import _run_trigger
+        cam = await get_camera_by_id(int(camera_id))
         if not cam:
             return {"error": f"Camara ID {camera_id} no encontrada"}
         result = await _run_trigger(
@@ -73,9 +53,7 @@ def _mqtt_trigger_sync(camera_id):
             callback_url=cam.get("callback_url", ""),
             callback_active=cam.get("callback_active", "false"),
         )
-        # _run_trigger puede devolver JSONResponse, extraer body
         if hasattr(result, 'body'):
-            import json
             return json.loads(result.body)
         return result
 
@@ -101,7 +79,6 @@ async def lifespan(app: FastAPI):
     db_cameras = camera_manager.list_cameras()
     if db_cameras:
         print(f"  Camaras cargadas desde BD: {len(db_cameras)}")
-    # Iniciar MQTT
     mqtt_manager.set_trigger_callback(_mqtt_trigger_sync)
     mqtt_manager.start()
     yield
@@ -112,1077 +89,96 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Panel de Confecciones de Frutas",
     description="Sistema completo de clasificacion y gestion de confecciones",
-    version="3.0.0",
+    version="3.1.0",
     lifespan=lifespan,
 )
 
+# ─── Static files ────────────────────────────────────────────────
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-app.mount("/dataset-files", StaticFiles(directory=str(DATASET_DIR)), name="dataset-files")
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
-# ─── Helpers ─────────────────────────────────────────────────────
-async def get_user_or_redirect(request: Request):
-    """Obtiene el usuario o retorna redirect a login."""
-    user = await get_current_user(request)
-    if not user:
-        return None
-    return user
+# ─── CSRF Middleware ─────────────────────────────────────────────
+CSRF_EXEMPT_PATHS = {"/login"}
+CSRF_EXEMPT_PREFIXES = ("/api/", "/camera/stream", "/camera/snapshot")
 
 
-def flash(request: Request, message: str, category: str = "info"):
-    """Guarda un mensaje flash en la sesion."""
-    if not hasattr(request.state, '_flash'):
-        request.state._flash = []
-    request.state._flash.append({"message": message, "category": category})
+@app.middleware("http")
+async def csrf_middleware(request: Request, call_next):
+    """Verifica CSRF header en POST y establece cookie CSRF."""
+    # Verificar CSRF en POST (excepto API y login)
+    if request.method == "POST":
+        path = request.url.path
+        is_exempt = (
+            path in CSRF_EXEMPT_PATHS
+            or any(path.startswith(p) for p in CSRF_EXEMPT_PREFIXES)
+        )
+        if not is_exempt:
+            session = request.cookies.get("session", "")
+            if session and not await verify_csrf(request):
+                return JSONResponse(
+                    {"error": "Token CSRF invalido. Recarga la pagina."},
+                    status_code=403,
+                )
 
+    response = await call_next(request)
 
-# ─── Rutas de autenticacion ─────────────────────────────────────
-@app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    user = await get_current_user(request)
-    if user:
-        return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request, "login.html", {"request": request})
+    # Establecer cookie CSRF si hay sesion
+    session = request.cookies.get("session", "")
+    if session:
+        csrf = get_csrf_token(request)
+        response.set_cookie(
+            "csrf_token", csrf, max_age=86400 * 7,
+            httponly=False, samesite="lax",
+        )
 
-
-@app.post("/login")
-async def login_submit(request: Request):
-    form = await request.form()
-    username = form.get("username", "")
-    password = form.get("password", "")
-
-    token = await authenticate(username, password)
-    if not token:
-        return templates.TemplateResponse(request, "login.html", {
-            "request": request,
-            "error": "Usuario o contrasena incorrectos",
-        })
-
-    response = RedirectResponse("/", status_code=303)
-    response.set_cookie("session", token, max_age=86400 * 7, httponly=True)
     return response
 
 
-@app.get("/logout")
-async def logout():
-    response = RedirectResponse("/login", status_code=303)
-    response.delete_cookie("session")
-    return response
-
-
-# ─── Dashboard ───────────────────────────────────────────────────
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    dataset_stats = await get_dataset_stats()
-    runs = await get_training_runs(5)
-
-    return templates.TemplateResponse(request, "dashboard.html", {
-        "request": request,
-        "user": user,
-        "model_loaded": model_manager.is_loaded,
-        "class_names": model_manager.class_names,
-        "dataset_stats": dataset_stats,
-        "total_images": sum(dataset_stats.values()),
-        "recent_runs": runs,
-        "training_running": training_state["running"],
-    })
-
-
-# ─── Dataset ─────────────────────────────────────────────────────
-@app.get("/dataset", response_class=HTMLResponse)
-async def dataset_page(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    dataset_stats = await get_dataset_stats()
-    images_by_class = {}
-    for class_dir in sorted(DATASET_DIR.iterdir()):
-        if class_dir.is_dir():
-            images = sorted([
-                f.name for f in class_dir.iterdir()
-                if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp')
-            ])
-            images_by_class[class_dir.name] = images
-
-    return templates.TemplateResponse(request, "dataset.html", {
-        "request": request,
-        "user": user,
-        "dataset_stats": dataset_stats,
-        "images_by_class": images_by_class,
-        "total_images": sum(dataset_stats.values()),
-    })
-
-
-@app.post("/dataset/upload")
-async def dataset_upload(request: Request, class_name: str = Form(...),
-                         files: list[UploadFile] = File(...)):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    class_dir = DATASET_DIR / class_name
-    class_dir.mkdir(exist_ok=True)
-
-    saved = 0
-    for file in files:
-        if file.content_type and file.content_type.startswith("image/"):
-            content = await file.read()
-            ext = Path(file.filename or "image.jpg").suffix or ".jpg"
-            filename = f"{uuid.uuid4().hex[:8]}_{file.filename}"
-            (class_dir / filename).write_bytes(content)
-            saved += 1
-
-    return RedirectResponse(f"/dataset?uploaded={saved}", status_code=303)
-
-
-@app.post("/dataset/delete")
-async def dataset_delete(request: Request, class_name: str = Form(...),
-                         filename: str = Form(...)):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    filepath = DATASET_DIR / class_name / filename
-    if filepath.exists() and filepath.parent.parent == DATASET_DIR:
-        filepath.unlink()
-
-    return RedirectResponse(f"/dataset?deleted=1", status_code=303)
-
-
-@app.post("/dataset/new-class")
-async def dataset_new_class(request: Request, class_name: str = Form(...)):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    class_dir = DATASET_DIR / class_name.strip().replace(" ", "_").lower()
-    class_dir.mkdir(exist_ok=True)
-
-    return RedirectResponse(f"/dataset?created={class_name}", status_code=303)
-
-
-# ─── Entrenamiento ───────────────────────────────────────────────
-@app.get("/train", response_class=HTMLResponse)
-async def train_page(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    return templates.TemplateResponse(request, "train.html", {
-        "request": request,
-        "user": user,
-        "training_state": training_state,
-        "model_loaded": model_manager.is_loaded,
-        "cfg_epochs_head": EPOCHS_HEAD,
-        "cfg_epochs_finetune": EPOCHS_FINETUNE,
-        "cfg_lr_head": LR_HEAD,
-        "cfg_lr_finetune": LR_FINETUNE,
-        "cfg_batch_size": BATCH_SIZE,
-        "cfg_early_stop": EARLY_STOP_PATIENCE,
-        "cfg_label_smoothing": LABEL_SMOOTHING,
-        "cfg_warmup_epochs": WARMUP_EPOCHS,
-    })
-
-
-@app.post("/train/start")
-async def train_start(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    if training_state["running"]:
-        return RedirectResponse("/train?error=already_running", status_code=303)
-
-    # Resetear estado
-    training_state["running"] = True
-    training_state["progress"] = []
-    training_state["current_epoch"] = 0
-    training_state["total_epochs"] = 0
-    training_state["best_val_acc"] = 0.0
-
-    # Guardar registro en DB
-    from config import EPOCHS_HEAD, EPOCHS_FINETUNE
-    run_id = await save_training_run("running", EPOCHS_HEAD, EPOCHS_FINETUNE)
-    training_state["run_id"] = run_id
-
-    # Ejecutar entrenamiento en background
-    asyncio.create_task(_run_training_background(run_id))
-
-    return RedirectResponse("/train?started=1", status_code=303)
-
-
-async def _run_training_background(run_id: int):
-    """Ejecuta el entrenamiento en segundo plano."""
-    from train import run_training_sync
-
-    loop = asyncio.get_event_loop()
-
-    def progress_callback(info):
-        """Callback que se llama por cada epoca."""
-        msg = info.get("message", "")
-        training_state["progress"].append(info)
-
-        if "epoch" in info:
-            training_state["current_epoch"] = info["epoch"]
-        if "total_epochs" in info:
-            training_state["total_epochs"] = info["total_epochs"]
-        if "best_val_acc" in info:
-            training_state["best_val_acc"] = info["best_val_acc"]
-
-        return True  # continuar
-
-    try:
-        result = await loop.run_in_executor(
-            None, lambda: run_training_sync(progress_callback=progress_callback)
-        )
-
-        if result["status"] == "completed":
-            history_json = json.dumps(result["history"])
-            await save_training_run(
-                "completed", 0, 0,
-                best_val_acc=result["best_val_acc"],
-                final_train_acc=result.get("final_train_acc"),
-                model_path=str(MODEL_PATH),
-                history_json=history_json,
-                run_id=run_id,
-            )
-            # Recargar modelo
-            model_manager.load()
-        elif result["status"] == "cancelled":
-            await save_training_run("cancelled", 0, 0, run_id=run_id)
-
-    except Exception as e:
-        await save_training_run("error", 0, 0, error_message=str(e), run_id=run_id)
-        training_state["progress"].append({"message": f"ERROR: {str(e)}", "phase": "error"})
-
-    finally:
-        training_state["running"] = False
-
-
-@app.get("/train/progress")
-async def train_progress():
-    """SSE endpoint para progreso del entrenamiento en tiempo real."""
-    async def event_generator():
-        last_idx = 0
-        while training_state["running"] or last_idx < len(training_state["progress"]):
-            while last_idx < len(training_state["progress"]):
-                info = training_state["progress"][last_idx]
-                data = json.dumps(info)
-                yield f"data: {data}\n\n"
-                last_idx += 1
-
-            if not training_state["running"] and last_idx >= len(training_state["progress"]):
-                yield f"data: {json.dumps({'message': '[DONE]', 'phase': 'done'})}\n\n"
-                break
-
-            await asyncio.sleep(0.5)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-# ─── Predicciones ────────────────────────────────────────────────
-@app.get("/predict", response_class=HTMLResponse)
-async def predict_page(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    return templates.TemplateResponse(request, "predict.html", {
-        "request": request,
-        "user": user,
-        "model_loaded": model_manager.is_loaded,
-        "class_names": model_manager.class_names,
-    })
-
-
-@app.post("/predict")
-async def predict_submit(request: Request, file: UploadFile = File(...),
-                         use_tta: bool = Form(True)):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    if not model_manager.is_loaded:
-        return templates.TemplateResponse(request, "predict.html", {
-            "request": request,
-            "user": user,
-            "model_loaded": False,
-            "error": "No hay modelo cargado. Entrena primero.",
-        })
-
-    try:
-        image_bytes = await file.read()
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        result = model_manager.predict(image, use_tta=use_tta)
-
-        # Guardar prediccion en DB
-        await save_prediction(
-            file.filename or "unknown",
-            result["confeccion"],
-            result["confianza"],
-            result["probabilidades"],
-        )
-
-        return templates.TemplateResponse(request, "predict.html", {
-            "request": request,
-            "user": user,
-            "model_loaded": True,
-            "class_names": model_manager.class_names,
-            "result": result,
-            "filename": file.filename,
-        })
-
-    except Exception as e:
-        return templates.TemplateResponse(request, "predict.html", {
-            "request": request,
-            "user": user,
-            "model_loaded": True,
-            "class_names": model_manager.class_names,
-            "error": f"Error procesando imagen: {str(e)}",
-        })
-
-
-# ─── Historial ───────────────────────────────────────────────────
-@app.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    runs = await get_training_runs(50)
-    predictions = await get_predictions(100)
-
-    return templates.TemplateResponse(request, "history.html", {
-        "request": request,
-        "user": user,
-        "runs": runs,
-        "predictions": predictions,
-    })
-
-
-# ─── API Docs ────────────────────────────────────────────────────
-@app.get("/api-docs", response_class=HTMLResponse)
-async def api_docs_page(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    return templates.TemplateResponse(request, "api_docs.html", {
-        "request": request,
-        "user": user,
-    })
-
-
-# ─── Ajustes ─────────────────────────────────────────────────────
-@app.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    users = await get_all_users()
-    return templates.TemplateResponse(request, "settings.html", {
-        "request": request,
-        "user": user,
-        "users": users,
-        "host": HOST,
-        "port": PORT,
-        "success": request.query_params.get("success"),
-        "error": request.query_params.get("error"),
-    })
-
-
-@app.post("/settings/change-password")
-async def settings_change_password(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    form = await request.form()
-    target_user = form.get("username", "")
-    new_pass = form.get("new_password", "")
-    confirm_pass = form.get("confirm_password", "")
-
-    if not new_pass or len(new_pass) < 4:
-        return RedirectResponse("/settings?error=La+contrasena+debe+tener+al+menos+4+caracteres", status_code=303)
-
-    if new_pass != confirm_pass:
-        return RedirectResponse("/settings?error=Las+contrasenas+no+coinciden", status_code=303)
-
-    ok, msg = await change_password(target_user, new_pass)
-    if ok:
-        return RedirectResponse(f"/settings?success={msg}", status_code=303)
-    else:
-        return RedirectResponse(f"/settings?error={msg}", status_code=303)
-
-
-@app.post("/settings/add-user")
-async def settings_add_user(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    form = await request.form()
-    new_user = form.get("new_username", "").strip()
-    new_pass = form.get("new_user_password", "")
-
-    if not new_user or not new_pass:
-        return RedirectResponse("/settings?error=Usuario+y+contrasena+requeridos", status_code=303)
-
-    if len(new_pass) < 4:
-        return RedirectResponse("/settings?error=La+contrasena+debe+tener+al+menos+4+caracteres", status_code=303)
-
-    ok, msg = await add_user(new_user, new_pass)
-    if ok:
-        return RedirectResponse(f"/settings?success={msg}", status_code=303)
-    else:
-        return RedirectResponse(f"/settings?error={msg}", status_code=303)
-
-
-@app.post("/settings/delete-user")
-async def settings_delete_user(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    form = await request.form()
-    target = form.get("username", "")
-
-    if target == user:
-        return RedirectResponse("/settings?error=No+puedes+eliminarte+a+ti+mismo", status_code=303)
-
-    ok, msg = await delete_user(target)
-    if ok:
-        return RedirectResponse(f"/settings?success={msg}", status_code=303)
-    else:
-        return RedirectResponse(f"/settings?error={msg}", status_code=303)
-
-
-@app.post("/settings/save-server")
-async def settings_save_server(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    form = await request.form()
-    new_host = form.get("host", "0.0.0.0").strip()
-    new_port = form.get("port", "8000").strip()
-
-    try:
-        new_port = int(new_port)
-        if not (1024 <= new_port <= 65535):
-            raise ValueError()
-    except ValueError:
-        return RedirectResponse("/settings?error=Puerto+debe+ser+un+numero+entre+1024+y+65535", status_code=303)
-
-    # Actualizar config.py
-    config_path = Path(__file__).parent / "config.py"
-    content = config_path.read_text()
-    import re
-    content = re.sub(r'^HOST\s*=.*$', f'HOST = "{new_host}"', content, flags=re.MULTILINE)
-    content = re.sub(r'^PORT\s*=.*$', f'PORT = {new_port}', content, flags=re.MULTILINE)
-    config_path.write_text(content)
-
-    return RedirectResponse(
-        f"/settings?success=Configuracion+guardada.+Reinicia+el+servidor+para+aplicar+(puerto={new_port},+host={new_host})",
-        status_code=303
-    )
-
-
-# ─── Camaras ─────────────────────────────────────────────────────
-@app.get("/camera", response_class=HTMLResponse)
-async def camera_page(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    dataset_stats = await get_dataset_stats()
-    cameras = camera_manager.list_cameras()
-    db_cameras = await get_all_cameras()
-    return templates.TemplateResponse(request, "camera.html", {
-        "request": request,
-        "user": user,
-        "cameras": cameras,
-        "db_cameras": db_cameras,
-        "dataset_stats": dataset_stats,
-    })
-
-
-@app.post("/camera/scan")
-async def camera_scan(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return JSONResponse({"error": "No autorizado"}, status_code=401)
-
-    found = camera_manager.scan_usb_cameras()
-    return JSONResponse({"cameras": found, "total": len(found)})
-
-
-@app.post("/camera/add-ip")
-async def camera_add_ip(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    form = await request.form()
-    name = form.get("name", "").strip()
-    url = form.get("url", "").strip()
-    callback_url = form.get("callback_url", "").strip()
-    callback_active = "true" if form.get("callback_active") else "false"
-
-    if not name or not url:
-        return RedirectResponse("/camera?error=Nombre+y+URL+requeridos", status_code=303)
-
-    # Probar conexion
-    test = camera_manager.test_ip_camera(url)
-    if "error" in test:
-        return RedirectResponse(f"/camera?error={test['error']}", status_code=303)
-
-    resolution = test.get("resolution", "")
-
-    # Guardar en BD
-    cam = await create_camera(
-        name=name, camera_type="ip", source=url,
-        resolution=resolution, callback_url=callback_url,
-        callback_active=callback_active,
-    )
-
-    # Registrar en memoria
-    camera_manager.register_camera(
-        str(cam["id"]), "ip", url, name, cam["slug"],
-        resolution, callback_url, callback_active,
-    )
-
-    return RedirectResponse(f"/camera?success=Camara+{name}+registrada", status_code=303)
-
-
-@app.post("/camera/register-usb")
-async def camera_register_usb(request: Request):
-    """Registra una camara USB escaneada en la BD con callback opcional."""
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    form = await request.form()
-    name = form.get("name", "").strip()
-    source = form.get("source", "").strip()
-    resolution = form.get("resolution", "").strip()
-    callback_url = form.get("callback_url", "").strip()
-    callback_active = "true" if form.get("callback_active") else "false"
-
-    if not name or not source:
-        return RedirectResponse("/camera?error=Datos+incompletos", status_code=303)
-
-    # Verificar que no esta ya registrada
-    existing = await get_all_cameras()
-    for c in existing:
-        if c["camera_type"] == "usb" and c["source"] == source:
-            return RedirectResponse("/camera?error=Camara+USB+ya+registrada", status_code=303)
-
-    cam = await create_camera(
-        name=name, camera_type="usb", source=source,
-        resolution=resolution, callback_url=callback_url,
-        callback_active=callback_active,
-    )
-
-    camera_manager.register_camera(
-        str(cam["id"]), "usb", source, name, cam["slug"],
-        resolution, callback_url, callback_active,
-    )
-
-    return RedirectResponse(f"/camera?success=Camara+{name}+registrada", status_code=303)
-
-
-@app.post("/camera/remove")
-async def camera_remove(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return JSONResponse({"error": "No autorizado"}, status_code=401)
-
-    form = await request.form()
-    cam_id = form.get("camera_id", "")
-
-    # Eliminar de BD tambien
-    try:
-        await delete_camera_db(int(cam_id))
-    except (ValueError, TypeError):
-        pass
-
-    camera_manager.remove_camera(cam_id)
-    return RedirectResponse("/camera?success=Camara+eliminada", status_code=303)
-
-
-@app.get("/camera/stream/{camera_id}")
-async def camera_stream(camera_id: str):
-    """MJPEG streaming de la camara en tiempo real."""
-    import asyncio
-    from fastapi.responses import StreamingResponse
-
-    async def generate():
-        while True:
-            frame_bytes = camera_manager.get_frame_jpeg(camera_id, quality=60)
-            if frame_bytes is None:
-                break
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            await asyncio.sleep(0.05)  # ~20 FPS
-
-    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
-
-
-@app.post("/camera/capture")
-async def camera_capture(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return JSONResponse({"error": "No autorizado"}, status_code=401)
-
-    form = await request.form()
-    cam_id = form.get("camera_id", "")
-    class_name = form.get("class_name", "")
-
-    if not cam_id or not class_name:
-        return JSONResponse({"error": "Camara y clase requeridas"}, status_code=400)
-
-    result = camera_manager.capture_and_save(cam_id, class_name)
-    return JSONResponse(result)
-
-
-@app.get("/camera/snapshot/{camera_id}")
-async def camera_snapshot(camera_id: str):
-    """Captura un solo frame como imagen JPEG."""
-    from fastapi.responses import Response
-    frame_bytes = camera_manager.get_frame_jpeg(camera_id, quality=90)
-    if frame_bytes is None:
-        return Response(status_code=503, content="Camara no disponible")
-    return Response(content=frame_bytes, media_type="image/jpeg")
-
-
-# ─── Escaner QR ─────────────────────────────────────────────────
-@app.get("/qr", response_class=HTMLResponse)
-async def qr_page(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    cameras = camera_manager.list_cameras()
-    history = await get_qr_scans(limit=50)
-    return templates.TemplateResponse(request, "qr.html", {
-        "request": request,
-        "user": user,
-        "cameras": cameras,
-        "history": history,
-    })
-
-
-@app.post("/qr/scan")
-async def qr_scan(request: Request):
-    user = await get_user_or_redirect(request)
+# ─── Dataset files con autenticacion ─────────────────────────────
+@app.get("/dataset-files/{filepath:path}")
+async def serve_dataset_file(request: Request, filepath: str):
+    """Sirve archivos del dataset solo a usuarios autenticados."""
+    user = await get_current_user(request)
     if not user:
         return JSONResponse({"error": "No autenticado"}, status_code=401)
 
-    data = await request.json()
-    camera_id = data.get("camera_id", "")
-
-    if not camera_id:
-        return JSONResponse({"error": "camera_id requerido"}, status_code=400)
-
-    results = camera_manager.scan_qr(camera_id)
-
-    # Guardar en historial
-    for r in results:
-        await save_qr_scan(r["type"], r["data"], camera_id)
-
-    return JSONResponse({"results": results, "count": len(results)})
-
-
-# ─── API REST (para uso programatico) ───────────────────────────
-@app.get("/api")
-async def api_root():
-    return {
-        "status": "ok",
-        "modelo_cargado": model_manager.is_loaded,
-        "clases_disponibles": model_manager.class_names,
-        "version": "3.0.0",
-    }
-
-
-@app.get("/api/clases")
-async def api_clases():
-    return {"clases": model_manager.class_names, "total": len(model_manager.class_names)}
-
-
-@app.post("/api/predecir")
-async def api_predecir(file: UploadFile = File(...)):
-    if not model_manager.is_loaded:
-        raise HTTPException(status_code=503, detail="Modelo no cargado. Ejecuta el entrenamiento primero.")
-
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="El archivo debe ser una imagen")
+    file_path = DATASET_DIR / filepath
+    if not file_path.exists() or not file_path.is_file():
+        return JSONResponse({"error": "Archivo no encontrado"}, status_code=404)
 
     try:
-        image_bytes = await file.read()
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        result = model_manager.predict(image, use_tta=True)
+        file_path.resolve().relative_to(DATASET_DIR.resolve())
+    except ValueError:
+        return JSONResponse({"error": "Acceso denegado"}, status_code=403)
 
-        await save_prediction(
-            file.filename or "unknown",
-            result["confeccion"],
-            result["confianza"],
-            result["probabilidades"],
-        )
-
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error procesando imagen: {str(e)}")
+    return FileResponse(str(file_path))
 
 
-@app.post("/api/predecir-lote")
-async def api_predecir_lote(files: list[UploadFile] = File(...)):
-    if not model_manager.is_loaded:
-        raise HTTPException(status_code=503, detail="Modelo no cargado.")
-
-    resultados = []
-    for file in files:
-        if not file.content_type or not file.content_type.startswith("image/"):
-            resultados.append({"archivo": file.filename, "error": "No es una imagen valida"})
-            continue
-        try:
-            image_bytes = await file.read()
-            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            result = model_manager.predict(image, use_tta=True)
-            resultados.append({"archivo": file.filename, **result})
-        except Exception as e:
-            resultados.append({"archivo": file.filename, "error": str(e)})
-
-    return {"resultados": resultados, "total": len(resultados)}
-
-
-@app.get("/api/modelo/status")
-async def api_modelo_status():
-    return {
-        "cargado": model_manager.is_loaded,
-        "clases": model_manager.class_names,
-        "modelo_existe": MODEL_PATH.exists(),
-        "modelo_tamano": MODEL_PATH.stat().st_size if MODEL_PATH.exists() else 0,
-    }
-
-
-@app.get("/api/dataset/stats")
-async def api_dataset_stats():
-    stats = await get_dataset_stats()
-    return {"clases": stats, "total": sum(stats.values())}
-
-
-@app.get("/api/entrenamientos")
-async def api_entrenamientos():
-    runs = await get_training_runs(20)
-    return {"entrenamientos": runs}
-
-
-@app.get("/api/predicciones")
-async def api_predicciones():
-    preds = await get_predictions(50)
-    return {"predicciones": preds}
-
-
-@app.get("/api/qr/camaras")
-async def api_qr_camaras():
-    """Lista camaras disponibles para escaneo QR."""
-    cameras = camera_manager.list_cameras()
-    return {"cameras": cameras, "total": len(cameras)}
-
-
-@app.post("/api/qr/escanear")
-async def api_qr_escanear(camera_id: str = ""):
-    """Escanea un frame de la camara en busca de codigos QR y barras."""
-    if not camera_id:
-        return JSONResponse({"error": "camera_id requerido"}, status_code=400)
-
-    results = camera_manager.scan_qr(camera_id)
-
-    for r in results:
-        await save_qr_scan(r["type"], r["data"], camera_id)
-
-    return {"resultados": results, "total": len(results)}
-
-
-@app.post("/api/qr/escanear-imagen")
-async def api_qr_escanear_imagen(file: UploadFile = File(...)):
-    """Escanea una imagen subida en busca de codigos QR y barras."""
-    import numpy as np
-    contents = await file.read()
-    nparr = np.frombuffer(contents, np.uint8)
-    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if frame is None:
-        return JSONResponse({"error": "Imagen no valida"}, status_code=400)
-
-    results = []
-    # QR
-    try:
-        qr = cv2.QRCodeDetector()
-        retval, decoded_info, points, _ = qr.detectAndDecodeMulti(frame)
-        if retval and decoded_info:
-            for text in decoded_info:
-                if text:
-                    results.append({"type": "QR", "data": text})
-    except Exception:
-        try:
-            qr = cv2.QRCodeDetector()
-            decoded, _, _ = qr.detectAndDecode(frame)
-            if decoded:
-                results.append({"type": "QR", "data": decoded})
-        except Exception:
-            pass
-
-    # Barcode
-    try:
-        barcode = cv2.barcode_BarcodeDetector()
-        decoded, _, _ = barcode.detectAndDecode(frame)
-        if decoded:
-            results.append({"type": "BARCODE", "data": decoded})
-    except Exception:
-        pass
-
-    for r in results:
-        await save_qr_scan(r["type"], r["data"], "upload")
-
-    return {"resultados": results, "total": len(results)}
-
-
-@app.get("/api/qr/historial")
-async def api_qr_historial(limit: int = 50):
-    """Obtiene el historial de escaneos QR/barcode."""
-    scans = await get_qr_scans(limit)
-    return {"escaneos": scans, "total": len(scans)}
-
-
-# ─── Trigger / Sensor por camara ─────────────────────────────────
-async def _run_trigger(camera_id: str, camera_slug: str, camera_name: str,
-                       callback_url: str = '', callback_active: str = 'false'):
-    """Logica comun de trigger: captura, ML, QR, callback."""
-    frame, error = camera_manager.get_frame(camera_id)
-    if error:
-        return JSONResponse({"error": f"Error de camara: {error}"}, status_code=503)
-
-    from PIL import Image
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    pil_image = Image.fromarray(frame_rgb)
-
-    # ML prediction
-    ml_result = {}
-    try:
-        if model_manager.is_loaded:
-            ml_result = model_manager.predict(pil_image, use_tta=True)
-            await save_prediction(
-                f"trigger_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                ml_result.get("confeccion", ""),
-                ml_result.get("confianza", 0),
-                ml_result.get("probabilidades", {})
-            )
-    except Exception as e:
-        ml_result = {"error": str(e)}
-
-    # QR detection
-    qr_results = []
-    try:
-        qr_results = camera_manager.scan_qr(camera_id)
-        for r in qr_results:
-            await save_qr_scan(r["type"], r["data"], camera_id)
-    except Exception as e:
-        qr_results = [{"error": str(e)}]
-
-    timestamp = datetime.now().isoformat()
-    result = {
-        "timestamp": timestamp,
-        "camera_slug": camera_slug,
-        "camera_name": camera_name,
-        "ml": ml_result,
-        "qr": qr_results,
-        "qr_count": len([r for r in qr_results if "error" not in r]),
-    }
-
-    # Guardar foto
-    try:
-        trigger_dir = DATASET_DIR.parent / "trigger_captures"
-        trigger_dir.mkdir(exist_ok=True)
-        filename = f"trigger_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        filepath = trigger_dir / filename
-        cv2.imwrite(str(filepath), frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        result["capture_path"] = str(filepath)
-    except Exception:
-        pass
-
-    # Callback o respuesta directa
-    if callback_active == "true" and callback_url:
-        import asyncio
-        import httpx
-
-        async def send_callback():
-            try:
-                async with httpx.AsyncClient(timeout=10) as client:
-                    await client.post(callback_url, json=result)
-            except Exception as e:
-                print(f"Callback error: {e}")
-
-        asyncio.create_task(send_callback())
-        return JSONResponse({
-            "status": "processing",
-            "callback": True,
-            "callback_url": callback_url,
-            "camera": camera_slug,
-            "timestamp": timestamp,
-        })
-    else:
-        return JSONResponse(result)
-
-
-@app.post("/api/disparar/{camera_slug}")
-async def api_disparar_camara(camera_slug: str):
-    """Trigger por camara especifica. Sin autenticacion."""
-    cam = await get_camera_by_slug(camera_slug)
-    if not cam:
-        return JSONResponse({"error": f"Camara '{camera_slug}' no encontrada"}, status_code=404)
-
-    return await _run_trigger(
-        str(cam["id"]), cam["slug"], cam["name"],
-        cam.get("callback_url", ""), cam.get("callback_active", "false"),
-    )
-
-
-@app.post("/api/disparar")
-async def api_disparar_legacy():
-    """Endpoint legacy. Lista camaras disponibles."""
-    db_cams = await get_all_cameras()
-    if not db_cams:
-        return JSONResponse({
-            "error": "No hay camaras registradas. Registra camaras en la pagina de Camara.",
-            "camaras_disponibles": [],
-        }, status_code=404)
-
-    endpoints = []
-    for c in db_cams:
-        endpoints.append({
-            "slug": c["slug"],
-            "name": c["name"],
-            "endpoint": f"/api/disparar/{c['slug']}",
-            "callback_active": c["callback_active"],
-        })
-
-    return JSONResponse({
-        "mensaje": "Usa /api/disparar/{slug} para activar una camara especifica.",
-        "camaras_disponibles": endpoints,
-    })
-
-
+# ─── Legacy redirect ─────────────────────────────────────────────
 @app.post("/settings/save-trigger")
 async def save_trigger_settings(request: Request):
-    """Ruta legacy - redirige a camara."""
-    return RedirectResponse("/camera", status_code=303)
+    return JSONResponse({"redirect": "/camera"}, status_code=303, headers={"Location": "/camera"})
 
 
-# ─── MQTT ─────────────────────────────────────────────────────────
-
-
-@app.get("/mqtt", response_class=HTMLResponse)
-async def mqtt_page(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    triggers = await get_all_mqtt_triggers_async()
-    cameras = await get_all_cameras()
-
-    return templates.TemplateResponse(request, "mqtt.html", {
-        "request": request,
-        "user": user,
-        "triggers": triggers,
-        "cameras": cameras,
-        "mqtt_host": await get_setting("mqtt_host") or "",
-        "mqtt_port": await get_setting("mqtt_port") or "1883",
-        "mqtt_user": await get_setting("mqtt_user") or "",
-        "mqtt_pass": await get_setting("mqtt_pass") or "",
-        "mqtt_enabled": await get_setting("mqtt_enabled") or "false",
-        "mqtt_connected": mqtt_manager.is_connected,
-        "success": request.query_params.get("success"),
-        "error": request.query_params.get("error"),
-    })
-
-
-@app.post("/mqtt/save-broker")
-async def mqtt_save_broker(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    form = await request.form()
-    host = form.get("mqtt_host", "").strip()
-    port = form.get("mqtt_port", "1883").strip()
-    user_val = form.get("mqtt_user", "").strip()
-    pass_val = form.get("mqtt_pass", "").strip()
-    enabled = "true" if form.get("mqtt_enabled") == "true" else "false"
-
-    await set_setting("mqtt_host", host)
-    await set_setting("mqtt_port", port)
-    await set_setting("mqtt_user", user_val)
-    await set_setting("mqtt_pass", pass_val)
-    await set_setting("mqtt_enabled", enabled)
-
-    mqtt_manager.reload()
-
-    return RedirectResponse("/mqtt?success=Broker MQTT guardado correctamente", status_code=303)
-
-
-@app.post("/mqtt/add-trigger")
-async def mqtt_add_trigger(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    form = await request.form()
-    topic = form.get("topic", "").strip()
-    camera_id = form.get("camera_id", "").strip()
-    result_topic = form.get("result_topic", "").strip()
-    payload_vars = form.get("payload_vars", "").strip()
-
-    if not topic or not camera_id:
-        return RedirectResponse("/mqtt?error=Topico y camara son obligatorios", status_code=303)
-
-    try:
-        await create_mqtt_trigger(topic, int(camera_id), result_topic, payload_vars)
-        mqtt_manager.reload()
-        return RedirectResponse(f"/mqtt?success=Trigger agregado: {topic}", status_code=303)
-    except Exception as e:
-        return RedirectResponse(f"/mqtt?error={e}", status_code=303)
-
-
-@app.post("/mqtt/delete-trigger")
-async def mqtt_delete_trigger(request: Request):
-    user = await get_user_or_redirect(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
-    form = await request.form()
-    trigger_id = form.get("trigger_id", "").strip()
-
-    if trigger_id:
-        await delete_mqtt_trigger_db(int(trigger_id))
-        mqtt_manager.reload()
-
-    return RedirectResponse("/mqtt?success=Trigger eliminado", status_code=303)
+# ─── Montar routers ──────────────────────────────────────────────
+app.include_router(auth_router)
+app.include_router(pages_router)
+app.include_router(dataset_router)
+app.include_router(training_router)
+app.include_router(predictions_router)
+app.include_router(settings_router)
+app.include_router(cameras_router)
+app.include_router(api_router)
+app.include_router(mqtt_router)
 
 
 # ─── Main ────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
+    host, port = get_host(), get_port()
     print("="*50)
-    print("  Panel de Confecciones de Frutas v3.0")
-    print(f"  http://localhost:{PORT}")
+    print("  Panel de Confecciones de Frutas v3.1")
+    print(f"  http://localhost:{port}")
     print("  Acceso: admin / 123456789")
     print("="*50)
-    uvicorn.run(app, host=HOST, port=PORT)
+    uvicorn.run(app, host=host, port=port)

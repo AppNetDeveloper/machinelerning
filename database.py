@@ -11,14 +11,23 @@ import re
 import unicodedata
 from datetime import datetime
 from config import DB_PATH, ADMIN_USERNAME, ADMIN_PASSWORD
+import bcrypt
 
 
-def hash_password(password: str, salt: str = None) -> tuple[str, str]:
-    """Hashea una contraseña con salt. Retorna (hash, salt)."""
-    if salt is None:
-        salt = os.urandom(16).hex()
+def hash_password(password: str) -> str:
+    """Hashea una contraseña con bcrypt. Retorna el hash como string."""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def _verify_bcrypt(password: str, hashed: str) -> bool:
+    """Verifica password contra hash bcrypt."""
+    return bcrypt.checkpw(password.encode(), hashed.encode())
+
+
+def _verify_sha256(password: str, stored_hash: str, salt: str) -> bool:
+    """Verifica password contra hash SHA-256 legacy."""
     h = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
-    return h, salt
+    return h == stored_hash
 
 
 async def init_db():
@@ -105,10 +114,10 @@ async def init_db():
         # Crear admin si no existe
         cursor = await db.execute("SELECT id FROM users WHERE username = ?", (ADMIN_USERNAME,))
         if not await cursor.fetchone():
-            pw_hash, pw_salt = hash_password(ADMIN_PASSWORD)
+            pw_hash = hash_password(ADMIN_PASSWORD)
             await db.execute(
                 "INSERT INTO users (username, password_hash, password_salt, role) VALUES (?, ?, ?, ?)",
-                (ADMIN_USERNAME, pw_hash, pw_salt, "admin")
+                (ADMIN_USERNAME, pw_hash, "", "admin")
             )
 
         await db.commit()
@@ -124,12 +133,31 @@ async def get_user(username: str) -> dict | None:
 
 
 async def verify_user(username: str, password: str) -> bool:
-    """Verifica credenciales de usuario."""
+    """Verifica credenciales de usuario. Soporta bcrypt y SHA-256 legacy."""
     user = await get_user(username)
     if not user:
         return False
-    h, _ = hash_password(password, user["password_salt"])
-    return h == user["password_hash"]
+
+    stored_hash = user["password_hash"]
+
+    # bcrypt hashes empiezan con $2b$
+    if stored_hash.startswith("$2b$"):
+        if _verify_bcrypt(password, stored_hash):
+            return True
+    else:
+        # Legacy SHA-256: verificar y migrar a bcrypt
+        if _verify_sha256(password, stored_hash, user.get("password_salt", "")):
+            # Migrar a bcrypt silenciosamente
+            new_hash = hash_password(password)
+            async with aiosqlite.connect(str(DB_PATH)) as db:
+                await db.execute(
+                    "UPDATE users SET password_hash = ?, password_salt = '' WHERE username = ?",
+                    (new_hash, username)
+                )
+                await db.commit()
+            return True
+
+    return False
 
 
 async def save_training_run(status: str, epochs_head: int, epochs_finetune: int,
@@ -215,10 +243,10 @@ async def add_user(username: str, password: str, role: str = "admin") -> tuple[b
         if await cursor.fetchone():
             return False, "El usuario ya existe"
 
-        pw_hash, pw_salt = hash_password(password)
+        pw_hash = hash_password(password)
         await db.execute(
             "INSERT INTO users (username, password_hash, password_salt, role) VALUES (?, ?, ?, ?)",
-            (username, pw_hash, pw_salt, role)
+            (username, pw_hash, "", role)
         )
         await db.commit()
         return True, f"Usuario '{username}' creado correctamente"
@@ -231,10 +259,10 @@ async def change_password(username: str, new_password: str) -> tuple[bool, str]:
         if not await cursor.fetchone():
             return False, "Usuario no encontrado"
 
-        pw_hash, pw_salt = hash_password(new_password)
+        pw_hash = hash_password(new_password)
         await db.execute(
-            "UPDATE users SET password_hash = ?, password_salt = ? WHERE username = ?",
-            (pw_hash, pw_salt, username)
+            "UPDATE users SET password_hash = ?, password_salt = '' WHERE username = ?",
+            (pw_hash, username)
         )
         await db.commit()
         return True, f"Contrasena de '{username}' actualizada"

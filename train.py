@@ -297,7 +297,7 @@ def run_training_sync(progress_callback=None):
         return True
 
     use_amp = USE_AMP and device.type == "cuda"
-    scaler = torch.amp.GradScaler(device_type=device.type, enabled=use_amp)
+    scaler = torch.amp.GradScaler(enabled=use_amp)
     report(f"Usando dispositivo: {device} | AMP: {'activo' if use_amp else 'inactivo (CPU)'}", phase="init")
 
     train_transform, val_transform = get_transforms()

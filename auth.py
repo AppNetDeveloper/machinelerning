@@ -1,7 +1,10 @@
 """
 Sistema de autenticacion basado en sesiones con cookies firmadas.
+Incluye proteccion CSRF con double-submit cookie.
 """
 
+import hmac
+import hashlib
 from fastapi import Request, HTTPException
 from fastapi.responses import RedirectResponse
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -47,3 +50,29 @@ async def authenticate(username: str, password: str) -> str | None:
     if await verify_user(username, password):
         return create_session_token(username)
     return None
+
+
+# ─── CSRF Protection ──────────────────────────────────────────────
+
+def generate_csrf_token(session_token: str) -> str:
+    """Genera un CSRF token deterministico a partir del session token."""
+    return hmac.new(
+        SECRET_KEY.encode(), session_token.encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def get_csrf_token(request: Request) -> str:
+    """Obtiene el CSRF token para el request actual."""
+    session = request.cookies.get("session", "")
+    return generate_csrf_token(session)
+
+
+async def verify_csrf(request: Request) -> bool:
+    """Verifica CSRF via header X-CSRF-Token (no consume el body del form)."""
+    header_token = request.headers.get("x-csrf-token", "")
+    if not header_token:
+        return False
+
+    session = request.cookies.get("session", "")
+    expected = generate_csrf_token(session)
+    return hmac.compare_digest(header_token, expected)
