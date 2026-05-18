@@ -16,3 +16,4 @@ dataset/
 *.pth
 *.bak
 entrenamiento_grafica.png
+.playwright-mcp/
