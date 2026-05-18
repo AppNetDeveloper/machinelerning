@@ -29,6 +29,8 @@ from PIL import Image
 from config import (
     DATASET_DIR, MODEL_PATH, CLASES_PATH, STATIC_DIR, TEMPLATES_DIR,
     HOST, PORT, CONFIDENCE_THRESHOLD, IMG_SIZE,
+    EPOCHS_HEAD, EPOCHS_FINETUNE, LR_HEAD, LR_FINETUNE,
+    BATCH_SIZE, EARLY_STOP_PATIENCE, LABEL_SMOOTHING, WARMUP_EPOCHS,
 )
 from database import (
     init_db, save_training_run, get_training_runs, get_training_run,
@@ -36,10 +38,12 @@ from database import (
     get_all_users, add_user, change_password, delete_user,
     save_qr_scan, get_qr_scans, get_setting, set_setting, get_trigger_settings,
     create_camera, get_camera_by_slug, get_all_cameras, update_camera_db, delete_camera_db,
+    create_mqtt_trigger, get_all_mqtt_triggers_async, delete_mqtt_trigger_db,
 )
 from auth import authenticate, get_current_user, require_auth
 from ml_model import model_manager
 from camera import camera_manager
+from mqtt_manager import mqtt_manager
 
 
 # ─── Estado global del entrenamiento ─────────────────────────────
@@ -51,6 +55,35 @@ training_state = {
     "best_val_acc": 0.0,
     "run_id": None,
 }
+
+
+def _mqtt_trigger_sync(camera_id):
+    """Callback sincrono para triggers MQTT (ejecutado en hilo daemon)."""
+    import asyncio
+    from database import get_camera_by_id as _get_cam_sync
+
+    async def _do_trigger():
+        cam = await _get_cam_sync(int(camera_id))
+        if not cam:
+            return {"error": f"Camara ID {camera_id} no encontrada"}
+        result = await _run_trigger(
+            camera_id=str(cam["id"]),
+            camera_slug=cam["slug"],
+            camera_name=cam["name"],
+            callback_url=cam.get("callback_url", ""),
+            callback_active=cam.get("callback_active", "false"),
+        )
+        # _run_trigger puede devolver JSONResponse, extraer body
+        if hasattr(result, 'body'):
+            import json
+            return json.loads(result.body)
+        return result
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_do_trigger())
+    finally:
+        loop.close()
 
 
 @asynccontextmanager
@@ -68,7 +101,11 @@ async def lifespan(app: FastAPI):
     db_cameras = camera_manager.list_cameras()
     if db_cameras:
         print(f"  Camaras cargadas desde BD: {len(db_cameras)}")
+    # Iniciar MQTT
+    mqtt_manager.set_trigger_callback(_mqtt_trigger_sync)
+    mqtt_manager.start()
     yield
+    mqtt_manager.stop()
     camera_manager.release_all()
 
 
@@ -242,6 +279,14 @@ async def train_page(request: Request):
         "user": user,
         "training_state": training_state,
         "model_loaded": model_manager.is_loaded,
+        "cfg_epochs_head": EPOCHS_HEAD,
+        "cfg_epochs_finetune": EPOCHS_FINETUNE,
+        "cfg_lr_head": LR_HEAD,
+        "cfg_lr_finetune": LR_FINETUNE,
+        "cfg_batch_size": BATCH_SIZE,
+        "cfg_early_stop": EARLY_STOP_PATIENCE,
+        "cfg_label_smoothing": LABEL_SMOOTHING,
+        "cfg_warmup_epochs": WARMUP_EPOCHS,
     })
 
 
@@ -1039,6 +1084,97 @@ async def api_disparar_legacy():
 async def save_trigger_settings(request: Request):
     """Ruta legacy - redirige a camara."""
     return RedirectResponse("/camera", status_code=303)
+
+
+# ─── MQTT ─────────────────────────────────────────────────────────
+
+
+@app.get("/mqtt", response_class=HTMLResponse)
+async def mqtt_page(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    triggers = await get_all_mqtt_triggers_async()
+    cameras = await get_all_cameras()
+
+    return templates.TemplateResponse(request, "mqtt.html", {
+        "request": request,
+        "user": user,
+        "triggers": triggers,
+        "cameras": cameras,
+        "mqtt_host": await get_setting("mqtt_host") or "",
+        "mqtt_port": await get_setting("mqtt_port") or "1883",
+        "mqtt_user": await get_setting("mqtt_user") or "",
+        "mqtt_pass": await get_setting("mqtt_pass") or "",
+        "mqtt_enabled": await get_setting("mqtt_enabled") or "false",
+        "mqtt_connected": mqtt_manager.is_connected,
+        "success": request.query_params.get("success"),
+        "error": request.query_params.get("error"),
+    })
+
+
+@app.post("/mqtt/save-broker")
+async def mqtt_save_broker(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    form = await request.form()
+    host = form.get("mqtt_host", "").strip()
+    port = form.get("mqtt_port", "1883").strip()
+    user_val = form.get("mqtt_user", "").strip()
+    pass_val = form.get("mqtt_pass", "").strip()
+    enabled = "true" if form.get("mqtt_enabled") == "true" else "false"
+
+    await set_setting("mqtt_host", host)
+    await set_setting("mqtt_port", port)
+    await set_setting("mqtt_user", user_val)
+    await set_setting("mqtt_pass", pass_val)
+    await set_setting("mqtt_enabled", enabled)
+
+    mqtt_manager.reload()
+
+    return RedirectResponse("/mqtt?success=Broker MQTT guardado correctamente", status_code=303)
+
+
+@app.post("/mqtt/add-trigger")
+async def mqtt_add_trigger(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    form = await request.form()
+    topic = form.get("topic", "").strip()
+    camera_id = form.get("camera_id", "").strip()
+    result_topic = form.get("result_topic", "").strip()
+    payload_vars = form.get("payload_vars", "").strip()
+
+    if not topic or not camera_id:
+        return RedirectResponse("/mqtt?error=Topico y camara son obligatorios", status_code=303)
+
+    try:
+        await create_mqtt_trigger(topic, int(camera_id), result_topic, payload_vars)
+        mqtt_manager.reload()
+        return RedirectResponse(f"/mqtt?success=Trigger agregado: {topic}", status_code=303)
+    except Exception as e:
+        return RedirectResponse(f"/mqtt?error={e}", status_code=303)
+
+
+@app.post("/mqtt/delete-trigger")
+async def mqtt_delete_trigger(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    form = await request.form()
+    trigger_id = form.get("trigger_id", "").strip()
+
+    if trigger_id:
+        await delete_mqtt_trigger_db(int(trigger_id))
+        mqtt_manager.reload()
+
+    return RedirectResponse("/mqtt?success=Trigger eliminado", status_code=303)
 
 
 # ─── Main ────────────────────────────────────────────────────────

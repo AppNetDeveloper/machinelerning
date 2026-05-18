@@ -14,13 +14,14 @@
             <div class="card-header"><i class="bi bi-sliders"></i> Configuracion</div>
             <div class="card-body">
                 <table class="table table-dark table-sm">
-                    <tr><td>Fase 1 (cabeza)</td><td class="text-end">15 epocas</td></tr>
-                    <tr><td>Fase 2 (fine-tune)</td><td class="text-end">40 epocas</td></tr>
-                    <tr><td>Tamano de lote</td><td class="text-end">16</td></tr>
-                    <tr><td>LR cabeza</td><td class="text-end">0.001</td></tr>
-                    <tr><td>LR fine-tune</td><td class="text-end">0.00005</td></tr>
-                    <tr><td>Parada temprana</td><td class="text-end">8 epocas</td></tr>
-                    <tr><td>Suavizado de etiquetas</td><td class="text-end">0.1</td></tr>
+                    <tr><td>Fase 1 (cabeza)</td><td class="text-end">{{ cfg_epochs_head }} epocas</td></tr>
+                    <tr><td>Fase 2 (fine-tune)</td><td class="text-end">{{ cfg_epochs_finetune }} epocas</td></tr>
+                    <tr><td>Tamano de lote</td><td class="text-end">{{ cfg_batch_size }}</td></tr>
+                    <tr><td>LR cabeza</td><td class="text-end">{{ cfg_lr_head }}</td></tr>
+                    <tr><td>LR fine-tune</td><td class="text-end">{{ cfg_lr_finetune }}</td></tr>
+                    <tr><td>Parada temprana</td><td class="text-end">{{ cfg_early_stop }} epocas</td></tr>
+                    <tr><td>Suavizado de etiquetas</td><td class="text-end">{{ cfg_label_smoothing }}</td></tr>
+                    <tr><td>Warmup fine-tune</td><td class="text-end">{{ cfg_warmup_epochs }} epocas</td></tr>
                 </table>
             </div>
         </div>

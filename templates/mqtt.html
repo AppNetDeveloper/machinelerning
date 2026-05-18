@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}MQTT - Confecciones{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2><i class="bi bi-broadcast"></i> Configuracion MQTT</h2>
+    <p>Configura el broker MQTT y mapea topicos a camaras para triggers automaticos</p>
+</div>
+
+{% if success %}
+<div class="alert alert-success alert-dismissible fade show">
+    <i class="bi bi-check-circle"></i> {{ success }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-danger alert-dismissible fade show">
+    <i class="bi bi-exclamation-triangle"></i> {{ error }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="row g-4">
+    <!-- Configuracion del Broker -->
+    <div class="col-md-5">
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-hdd-rack"></i> Broker MQTT</span>
+                {% if mqtt_connected %}
+                    <span class="badge bg-success"><i class="bi bi-check-circle"></i> Conectado</span>
+                {% else %}
+                    <span class="badge bg-secondary"><i class="bi bi-x-circle"></i> Desconectado</span>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                <form method="post" action="/mqtt/save-broker">
+                    <div class="mb-3">
+                        <label class="form-label">Host / IP</label>
+                        <input type="text" class="form-control" name="mqtt_host"
+                               value="{{ mqtt_host }}" placeholder="ej: 65.21.240.51" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Puerto</label>
+                        <input type="number" class="form-control" name="mqtt_port"
+                               value="{{ mqtt_port }}" placeholder="1883">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Usuario</label>
+                        <input type="text" class="form-control" name="mqtt_user"
+                               value="{{ mqtt_user }}" placeholder="usuario">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Contrasena</label>
+                        <input type="password" class="form-control" name="mqtt_pass"
+                               value="{{ mqtt_pass }}" placeholder="contrasena">
+                    </div>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" name="mqtt_enabled"
+                               id="mqttEnabled" value="true"
+                               {% if mqtt_enabled == 'true' %}checked{% endif %}>
+                        <label class="form-check-label" for="mqttEnabled">MQTT habilitado</label>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-save"></i> Guardar y Reconectar
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Info -->
+        <div class="card">
+            <div class="card-header"><i class="bi bi-info-circle"></i> Como funciona</div>
+            <div class="card-body">
+                <p class="small" style="color: var(--text-muted);">
+                    <strong>1.</strong> Configura el broker MQTT arriba.<br>
+                    <strong>2.</strong> Agrega triggers: mapea un topico a una camara.<br>
+                    <strong>3.</strong> Define variables a extraer del payload (ej: <code>barcode,sensor_id</code>).<br>
+                    <strong>4.</strong> Cuando llegue un mensaje, se activa la camara y se procesa con ML.<br>
+                    <strong>5.</strong> El resultado (variables del sensor + ML) se publica en el topico de resultado.<br>
+                    <strong>6.</strong> El topico resultado soporta templates: <code>resultado/{barcode}</code>
+                </p>
+                <hr>
+                <p class="small" style="color: var(--text-muted);">
+                    <strong>Ejemplo payload JSON:</strong><br>
+                    <code>{"barcode": "ABC123", "linea": "1", "sensor_id": "S01"}</code><br><br>
+                    <strong>Variables a extraer:</strong> <code>barcode,linea,sensor_id</code><br><br>
+                    <strong>Resultado publicado:</strong><br>
+                    <code>{"source": {"topic": "...", "variables": {"barcode": "ABC123", ...}}, "ml": {...}}</code>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Triggers MQTT -->
+    <div class="col-md-7">
+        <div class="card mb-4">
+            <div class="card-header"><i class="bi bi-link-45deg"></i> Triggers: Topico → Camara</div>
+            <div class="card-body">
+                {% if triggers %}
+                <div class="table-responsive">
+                    <table class="table table-dark">
+                        <thead>
+                            <tr>
+                                <th>Topico Entrada</th>
+                                <th>Camara</th>
+                                <th>Variables</th>
+                                <th>Topico Resultado</th>
+                                <th>Estado</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for t in triggers %}
+                            <tr>
+                                <td><code>{{ t.topic }}</code></td>
+                                <td>{{ t.camera_name or 'ID: ' ~ t.camera_id }}</td>
+                                <td><code>{{ t.payload_vars or '-' }}</code></td>
+                                <td><code>{{ t.result_topic or '-' }}</code></td>
+                                <td>
+                                    {% if t.active == 'true' %}
+                                        <span class="badge bg-success">Activo</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">Inactivo</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <form method="post" action="/mqtt/delete-trigger" style="display:inline">
+                                        <input type="hidden" name="trigger_id" value="{{ t.id }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger"
+                                                onclick="return confirm('Eliminar este trigger?')">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-center" style="color: var(--text-muted);">No hay triggers configurados</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Agregar Trigger -->
+        <div class="card">
+            <div class="card-header"><i class="bi bi-plus-circle"></i> Agregar Trigger</div>
+            <div class="card-body">
+                <form method="post" action="/mqtt/add-trigger">
+                    <div class="mb-3">
+                        <label class="form-label">Topico MQTT de entrada</label>
+                        <input type="text" class="form-control" name="topic"
+                               placeholder="sensor/linea1/disparar" required>
+                        <div class="form-text">Topico que activa el trigger</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Camara</label>
+                        <select class="form-select" name="camera_id" required>
+                            <option value="">-- Seleccionar camara --</option>
+                            {% for cam in cameras %}
+                            <option value="{{ cam.id }}">{{ cam.name }} ({{ cam.slug }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Variables a extraer del payload</label>
+                        <input type="text" class="form-control" name="payload_vars"
+                               placeholder="barcode,sensor_id,linea">
+                        <div class="form-text">Nombres separados por coma. Se extraen del JSON del payload.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Topico para resultado</label>
+                        <input type="text" class="form-control" name="result_topic"
+                               placeholder="resultado/linea1">
+                        <div class="form-text">Soporta templates: <code>resultado/{barcode}</code></div>
+                    </div>
+                    <button type="submit" class="btn btn-success w-100">
+                        <i class="bi bi-plus"></i> Agregar Trigger
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

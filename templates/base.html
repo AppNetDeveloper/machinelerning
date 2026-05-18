@@ -45,6 +45,10 @@
             <span class="icon"><i class="bi bi-clock-history"></i></span>
             Historial
         </a>
+        <a href="/mqtt" class="nav-link {% if request.url.path == '/mqtt' %}active{% endif %}">
+            <span class="icon"><i class="bi bi-broadcast"></i></span>
+            MQTT
+        </a>
         <a href="/api-docs" class="nav-link {% if request.url.path == '/api-docs' %}active{% endif %}">
             <span class="icon"><i class="bi bi-braces"></i></span>
             API

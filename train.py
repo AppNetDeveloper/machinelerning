@@ -18,7 +18,7 @@ import json
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split, WeightedRandomSampler
+from torch.utils.data import DataLoader, WeightedRandomSampler, Subset
 from torchvision import datasets, transforms, models
 from pathlib import Path
 from collections import Counter
@@ -31,7 +31,8 @@ from config import (
     DATASET_DIR, MODEL_PATH, CLASES_PATH, IMG_SIZE, BATCH_SIZE,
     EPOCHS_HEAD, EPOCHS_FINETUNE, LR_HEAD, LR_FINETUNE,
     VALIDATION_SPLIT, LABEL_SMOOTHING, EARLY_STOP_PATIENCE,
-    WEIGHT_DECAY, MIXUP_ALPHA,
+    WEIGHT_DECAY, MIXUP_ALPHA, GRAD_CLIP_MAX_NORM, WARMUP_EPOCHS,
+    USE_AMP, NUM_WORKERS, PREFETCH_FACTOR, CHECKPOINT_EVERY, CHECKPOINT_PATH,
 )
 
 
@@ -77,6 +78,22 @@ def get_transforms():
     return train_transform, val_transform
 
 
+def stratified_split(dataset, val_ratio=0.2, seed=42):
+    """Divide el dataset preservando la proporcion de clases en train y val."""
+    targets = np.array(dataset.targets)
+    rng = np.random.RandomState(seed)
+    train_indices, val_indices = [], []
+    for cls in np.unique(targets):
+        cls_indices = np.where(targets == cls)[0]
+        rng.shuffle(cls_indices)
+        n_val = max(1, int(len(cls_indices) * val_ratio))
+        val_indices.extend(cls_indices[:n_val].tolist())
+        train_indices.extend(cls_indices[n_val:].tolist())
+    rng.shuffle(train_indices)
+    rng.shuffle(val_indices)
+    return Subset(dataset, train_indices), Subset(dataset, val_indices)
+
+
 def clean_empty_classes(dataset_dir):
     """Elimina carpetas de clases sin imágenes válidas."""
     valid_ext = {'.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp'}
@@ -106,33 +123,37 @@ def load_dataset(dataset_dir, train_transform, val_transform):
             f"Clases encontradas: {valid_classes}. "
             f"Sube imagenes desde el panel web antes de entrenar."
         )
-    full_dataset = datasets.ImageFolder(root=dataset_dir, transform=train_transform)
-    class_names = full_dataset.classes
+    train_dataset_full = datasets.ImageFolder(root=dataset_dir, transform=train_transform)
+    val_dataset_full = datasets.ImageFolder(root=dataset_dir, transform=val_transform)
+    class_names = train_dataset_full.classes
     num_classes = len(class_names)
-    val_size = int(len(full_dataset) * VALIDATION_SPLIT)
-    train_size = len(full_dataset) - val_size
-    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
-    val_dataset.dataset = datasets.ImageFolder(root=dataset_dir, transform=val_transform)
 
-    train_targets = [full_dataset.targets[i] for i in train_dataset.indices]
+    train_subset, val_subset = stratified_split(train_dataset_full, val_ratio=VALIDATION_SPLIT)
+    # Reemplazar el dataset interno del val_subset para usar val_transform
+    val_subset = Subset(val_dataset_full, val_subset.indices)
+
+    train_targets = [train_dataset_full.targets[i] for i in train_subset.indices]
     class_counts = Counter(train_targets)
-    sample_weights = [1.0 / class_counts[full_dataset.targets[i]] for i in train_dataset.indices]
+    sample_weights = [1.0 / class_counts[train_dataset_full.targets[i]] for i in train_subset.indices]
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=sampler,
-                              num_workers=2, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
-                            num_workers=2, pin_memory=True)
+    train_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, sampler=sampler,
+                              num_workers=NUM_WORKERS, pin_memory=True,
+                              persistent_workers=NUM_WORKERS > 0, prefetch_factor=PREFETCH_FACTOR if NUM_WORKERS > 0 else None)
+    val_loader = DataLoader(val_subset, batch_size=BATCH_SIZE, shuffle=False,
+                            num_workers=NUM_WORKERS, pin_memory=True,
+                            persistent_workers=NUM_WORKERS > 0)
 
-    class_counts_all = Counter(full_dataset.targets)
+    class_counts_all = Counter(train_dataset_full.targets)
     print(f"""
 {"="*50}
 Dataset cargado:
   Clases: {class_names}
-  Total imagenes: {len(full_dataset)}""")
+  Total imagenes: {len(train_dataset_full)}""")
     for i, name in enumerate(class_names):
         print(f"    {name}: {class_counts_all[i]} imagenes")
-    print(f"  Entrenamiento: {train_size} | Validacion: {val_size}")
+    print(f"  Entrenamiento: {len(train_subset)} | Validacion: {len(val_subset)}")
+    print(f"  Split estratificado activo")
     print(f"  Weighted sampler activo")
     print(f"{"="*50}")
     return train_loader, val_loader, class_names, num_classes
@@ -156,23 +177,35 @@ def unfreeze_layers(model):
     total = sum(p.numel() for p in model.parameters())
     print(f"  Parametros entrenables: {trainable:,} / {total:,} ({100*trainable/total:.1f}%)")
 
-def train_epoch(model, train_loader, criterion, optimizer, device, use_mixup=True):
+def train_epoch(model, train_loader, criterion, optimizer, device, use_mixup=True, max_grad_norm=None, scaler=None):
     model.train()
     running_loss = 0.0
     correct = 0
     total = 0
+    use_amp = scaler is not None
     for images, labels in train_loader:
         images, labels = images.to(device), labels.to(device)
         optimizer.zero_grad()
-        if use_mixup:
-            mixed_images, labels_a, labels_b, lam = mixup_data(images, labels)
-            outputs = model(mixed_images)
-            loss = lam * criterion(outputs, labels_a) + (1 - lam) * criterion(outputs, labels_b)
+        with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+            if use_mixup:
+                mixed_images, labels_a, labels_b, lam = mixup_data(images, labels)
+                outputs = model(mixed_images)
+                loss = lam * criterion(outputs, labels_a) + (1 - lam) * criterion(outputs, labels_b)
+            else:
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+        if use_amp:
+            scaler.scale(loss).backward()
+            if max_grad_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
         else:
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+            loss.backward()
+            if max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
+            optimizer.step()
         running_loss += loss.item()
         _, predicted = outputs.max(1)
         total += labels.size(0)
@@ -201,6 +234,33 @@ def validate(model, val_loader, criterion, device):
     return avg_loss, accuracy
 
 
+def save_checkpoint(model, optimizer, scheduler, scaler, epoch, phase, best_val_acc, history, path):
+    torch.save({
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict(),
+        "scaler_state": scaler.state_dict() if scaler else None,
+        "epoch": epoch,
+        "phase": phase,
+        "best_val_acc": best_val_acc,
+        "history": history,
+    }, str(path))
+
+
+def load_checkpoint(path, model, optimizer=None, scheduler=None, scaler=None):
+    if not Path(path).exists():
+        return None
+    ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
+    model.load_state_dict(ckpt["model_state"])
+    if optimizer and "optimizer_state" in ckpt:
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+    if scheduler and "scheduler_state" in ckpt:
+        scheduler.load_state_dict(ckpt["scheduler_state"])
+    if scaler and ckpt.get("scaler_state"):
+        scaler.load_state_dict(ckpt["scaler_state"])
+    return ckpt
+
+
 def generar_graficas(history, class_names):
     epochs = range(1, len(history["train_loss"]) + 1)
     split_epoch = len([l for l in history["phase"] if l == 1])
@@ -222,6 +282,11 @@ def generar_graficas(history, class_names):
     return grafica_path
 
 
+def save_history_json(history, path="training_history.json"):
+    with open(path, "w") as f:
+        json.dump(history, f)
+
+
 def run_training_sync(progress_callback=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -231,7 +296,10 @@ def run_training_sync(progress_callback=None):
         print(msg)
         return True
 
-    report(f"Usando dispositivo: {device}", phase="init")
+    use_amp = USE_AMP and device.type == "cuda"
+    scaler = torch.amp.GradScaler(device_type=device.type, enabled=use_amp)
+    report(f"Usando dispositivo: {device} | AMP: {'activo' if use_amp else 'inactivo (CPU)'}", phase="init")
+
     train_transform, val_transform = get_transforms()
     train_loader, val_loader, class_names, num_classes = load_dataset(
         str(DATASET_DIR), train_transform, val_transform
@@ -242,48 +310,72 @@ def run_training_sync(progress_callback=None):
     history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": [], "lr": [], "phase": []}
     total_epochs = EPOCHS_HEAD + EPOCHS_FINETUNE
 
+    # Intentar reanudar desde checkpoint
+    start_phase, start_epoch = 1, 0
+    if Path(str(CHECKPOINT_PATH)).exists():
+        report(f"Checkpoint encontrado, reanudando...", phase="resume")
+        optimizer_tmp = optim.AdamW(model.fc.parameters(), lr=LR_HEAD)
+        scheduler_tmp = optim.lr_scheduler.ReduceLROnPlateau(optimizer_tmp, patience=3, factor=0.5)
+        ckpt = load_checkpoint(CHECKPOINT_PATH, model, optimizer_tmp, scheduler_tmp, scaler)
+        if ckpt:
+            start_phase = ckpt.get("phase", 1)
+            start_epoch = ckpt.get("epoch", 0) + 1
+            best_val_acc = ckpt.get("best_val_acc", 0.0)
+            history = ckpt.get("history", history)
+            report(f"Reanudando desde fase {start_phase}, epoca {start_epoch}, mejor val_acc: {best_val_acc:.1f}%", phase="resume")
+
     # FASE 1
-    report(f"FASE 1: Entrenando capa clasificadora ({EPOCHS_HEAD} epocas)", phase="phase1")
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
     optimizer = optim.AdamW(model.fc.parameters(), lr=LR_HEAD, weight_decay=WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5)
 
-    for epoch in range(EPOCHS_HEAD):
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss, val_acc = validate(model, val_loader, criterion, device)
-        scheduler.step(val_loss)
-        lr = optimizer.param_groups[0]["lr"]
-        history["train_loss"].append(train_loss); history["train_acc"].append(train_acc)
-        history["val_loss"].append(val_loss); history["val_acc"].append(val_acc)
-        history["lr"].append(lr); history["phase"].append(1)
+    phase1_range = range(start_epoch if start_phase == 1 else 0, EPOCHS_HEAD)
+    if start_phase == 1:
+        report(f"FASE 1: Entrenando capa clasificadora ({EPOCHS_HEAD} epocas)", phase="phase1")
+        for epoch in phase1_range:
+            train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device, scaler=scaler)
+            val_loss, val_acc = validate(model, val_loader, criterion, device)
+            scheduler.step(val_loss)
+            lr = optimizer.param_groups[0]["lr"]
+            history["train_loss"].append(train_loss); history["train_acc"].append(train_acc)
+            history["val_loss"].append(val_loss); history["val_acc"].append(val_acc)
+            history["lr"].append(lr); history["phase"].append(1)
+            save_history_json(history)
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc; epochs_no_improve = 0
-            torch.save(model.state_dict(), str(MODEL_PATH))
-        else:
-            epochs_no_improve += 1
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc; epochs_no_improve = 0
+                torch.save(model.state_dict(), str(MODEL_PATH))
+            else:
+                epochs_no_improve += 1
 
-        if epochs_no_improve >= 4:
-            report(f"Early stopping Fase 1 en epoca {epoch+1}", phase="early_stop", epoch=epoch+1, total_epochs=total_epochs)
-            break
+            if (epoch + 1) % CHECKPOINT_EVERY == 0:
+                save_checkpoint(model, optimizer, scheduler, scaler, epoch, 1, best_val_acc, history, CHECKPOINT_PATH)
 
-        cont = report(
-            f"Epoca {epoch+1:3d}/{total_epochs} | Train Loss: {train_loss:.4f} Acc: {train_acc:.1f}% | Val Loss: {val_loss:.4f} Acc: {val_acc:.1f}% | LR: {lr:.6f}",
-            phase="phase1", epoch=epoch+1, total_epochs=total_epochs,
-            train_loss=train_loss, train_acc=train_acc, val_loss=val_loss, val_acc=val_acc, lr=lr, best_val_acc=best_val_acc,
-        )
-        if cont is False:
-            return {"status": "cancelled", "history": history, "best_val_acc": best_val_acc}
+            if epochs_no_improve >= EARLY_STOP_PATIENCE:
+                report(f"Early stopping Fase 1 en epoca {epoch+1}", phase="early_stop", epoch=epoch+1, total_epochs=total_epochs)
+                break
+
+            cont = report(
+                f"Epoca {epoch+1:3d}/{total_epochs} | Train Loss: {train_loss:.4f} Acc: {train_acc:.1f}% | Val Loss: {val_loss:.4f} Acc: {val_acc:.1f}% | LR: {lr:.6f}",
+                phase="phase1", epoch=epoch+1, total_epochs=total_epochs,
+                train_loss=train_loss, train_acc=train_acc, val_loss=val_loss, val_acc=val_acc, lr=lr, best_val_acc=best_val_acc,
+            )
+            if cont is False:
+                save_checkpoint(model, optimizer, scheduler, scaler, epoch, 1, best_val_acc, history, CHECKPOINT_PATH)
+                return {"status": "cancelled", "history": history, "best_val_acc": best_val_acc}
+        start_epoch = 0
 
     # FASE 2
     report(f"FASE 2: Fine-tuning layer3+4 ({EPOCHS_FINETUNE} epocas)", phase="phase2")
     unfreeze_layers(model)
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
     optimizer_ft = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=LR_FINETUNE, weight_decay=WEIGHT_DECAY)
-    scheduler_ft = optim.lr_scheduler.CosineAnnealingLR(optimizer_ft, T_max=EPOCHS_FINETUNE, eta_min=1e-7)
+    scheduler_warmup = optim.lr_scheduler.LinearLR(optimizer_ft, start_factor=0.1, total_iters=WARMUP_EPOCHS)
+    scheduler_cosine = optim.lr_scheduler.CosineAnnealingLR(optimizer_ft, T_max=EPOCHS_FINETUNE - WARMUP_EPOCHS, eta_min=1e-7)
+    scheduler_ft = optim.lr_scheduler.SequentialLR(optimizer_ft, schedulers=[scheduler_warmup, scheduler_cosine], milestones=[WARMUP_EPOCHS])
 
-    for epoch in range(EPOCHS_FINETUNE):
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer_ft, device)
+    for epoch in range(start_epoch if start_phase == 2 else 0, EPOCHS_FINETUNE):
+        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer_ft, device, max_grad_norm=GRAD_CLIP_MAX_NORM, scaler=scaler)
         val_loss, val_acc = validate(model, val_loader, criterion, device)
         scheduler_ft.step()
         lr = optimizer_ft.param_groups[0]["lr"]
@@ -291,12 +383,16 @@ def run_training_sync(progress_callback=None):
         history["train_loss"].append(train_loss); history["train_acc"].append(train_acc)
         history["val_loss"].append(val_loss); history["val_acc"].append(val_acc)
         history["lr"].append(lr); history["phase"].append(2)
+        save_history_json(history)
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc; epochs_no_improve = 0
             torch.save(model.state_dict(), str(MODEL_PATH))
         else:
             epochs_no_improve += 1
+
+        if (epoch + 1) % CHECKPOINT_EVERY == 0:
+            save_checkpoint(model, optimizer_ft, scheduler_ft, scaler, epoch, 2, best_val_acc, history, CHECKPOINT_PATH)
 
         if epochs_no_improve >= EARLY_STOP_PATIENCE:
             report(f"Early stopping en epoca {epoch_num}", phase="early_stop", epoch=epoch_num, total_epochs=total_epochs)
@@ -308,11 +404,15 @@ def run_training_sync(progress_callback=None):
             train_loss=train_loss, train_acc=train_acc, val_loss=val_loss, val_acc=val_acc, lr=lr, best_val_acc=best_val_acc,
         )
         if cont is False:
+            save_checkpoint(model, optimizer_ft, scheduler_ft, scaler, epoch, 2, best_val_acc, history, CHECKPOINT_PATH)
             return {"status": "cancelled", "history": history, "best_val_acc": best_val_acc}
 
+    # Limpieza final
     with open(str(CLASES_PATH), "w") as f:
         json.dump(class_names, f, indent=2)
     grafica_path = generar_graficas(history, class_names)
+    if Path(str(CHECKPOINT_PATH)).exists():
+        Path(str(CHECKPOINT_PATH)).unlink()
     report(f"Entrenamiento completado! Mejor val acc: {best_val_acc:.1f}%", phase="done", best_val_acc=best_val_acc, grafica_path=grafica_path)
 
     return {

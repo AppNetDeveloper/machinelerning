@@ -83,7 +83,24 @@ async def init_db():
                 callback_active TEXT DEFAULT 'false',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS mqtt_triggers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic TEXT NOT NULL,
+                camera_id INTEGER NOT NULL,
+                result_topic TEXT DEFAULT '',
+                payload_vars TEXT DEFAULT '',
+                active TEXT DEFAULT 'true',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (camera_id) REFERENCES cameras(id) ON DELETE CASCADE
+            );
         """)
+
+        # Migracion: agregar payload_vars si no existe
+        try:
+            await db.execute("SELECT payload_vars FROM mqtt_triggers LIMIT 1")
+        except Exception:
+            await db.execute("ALTER TABLE mqtt_triggers ADD COLUMN payload_vars TEXT DEFAULT ''")
 
         # Crear admin si no existe
         cursor = await db.execute("SELECT id FROM users WHERE username = ?", (ADMIN_USERNAME,))
@@ -398,3 +415,93 @@ async def delete_camera_db(cam_id: int) -> bool:
         cursor = await db.execute("DELETE FROM cameras WHERE id = ?", (cam_id,))
         await db.commit()
         return cursor.rowcount > 0
+
+
+# ─── MQTT Triggers ─────────────────────────────────────────────────
+
+
+async def create_mqtt_trigger(topic: str, camera_id: int,
+                              result_topic: str = '', payload_vars: str = '',
+                              active: str = 'true') -> dict:
+    """Crea un trigger MQTT (topico -> camara)."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute(
+            "INSERT INTO mqtt_triggers (topic, camera_id, result_topic, payload_vars, active) VALUES (?, ?, ?, ?, ?)",
+            (topic, camera_id, result_topic, payload_vars, active)
+        )
+        await db.commit()
+        return {"id": cursor.lastrowid, "topic": topic, "camera_id": camera_id,
+                "result_topic": result_topic, "payload_vars": payload_vars, "active": active}
+
+
+async def get_all_mqtt_triggers_async() -> list[dict]:
+    """Obtiene todos los triggers MQTT (version async)."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT t.*, c.name as camera_name, c.slug as camera_slug
+            FROM mqtt_triggers t
+            LEFT JOIN cameras c ON t.camera_id = c.id
+            ORDER BY t.id
+        """)
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def update_mqtt_trigger_db(trigger_id: int, **fields) -> bool:
+    """Actualiza un trigger MQTT."""
+    if not fields:
+        return False
+    allowed = {'topic', 'camera_id', 'result_topic', 'payload_vars', 'active'}
+    filtered = {k: v for k, v in fields.items() if k in allowed}
+    if not filtered:
+        return False
+    sets = ', '.join(f"{k} = ?" for k in filtered)
+    values = list(filtered.values()) + [trigger_id]
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute(f"UPDATE mqtt_triggers SET {sets} WHERE id = ?", values)
+        await db.commit()
+    return True
+
+
+async def delete_mqtt_trigger_db(trigger_id: int) -> bool:
+    """Elimina un trigger MQTT."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute("DELETE FROM mqtt_triggers WHERE id = ?", (trigger_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+# ─── Funciones sincronas para el hilo MQTT ─────────────────────────
+
+import sqlite3 as _sqlite3
+
+
+def get_setting_sync(key: str) -> str | None:
+    """Obtiene un setting de forma sincrona (para hilo MQTT)."""
+    try:
+        conn = _sqlite3.connect(str(DB_PATH))
+        cursor = conn.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def get_all_mqtt_triggers() -> list[dict]:
+    """Obtiene todos los triggers MQTT de forma sincrona (para hilo MQTT)."""
+    try:
+        conn = _sqlite3.connect(str(DB_PATH))
+        conn.row_factory = _sqlite3.Row
+        cursor = conn.execute("""
+            SELECT t.*, c.name as camera_name, c.slug as camera_slug
+            FROM mqtt_triggers t
+            LEFT JOIN cameras c ON t.camera_id = c.id
+            ORDER BY t.id
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
