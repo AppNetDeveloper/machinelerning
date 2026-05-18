@@ -34,6 +34,7 @@ WEIGHT_DECAY = 1e-4
 MIXUP_ALPHA = 0.2
 GRAD_CLIP_MAX_NORM = 1.0
 WARMUP_EPOCHS = 5
+EMA_DECAY = 0.999
 
 # ─── Rendimiento ─────────────────────────────────────────────────
 USE_AMP = True

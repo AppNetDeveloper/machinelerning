@@ -24,7 +24,7 @@ class ModelManager:
         self._setup_transforms()
 
     def _setup_transforms(self):
-        """Configura las transformaciones para TTA."""
+        """Configura las transformaciones para TTA (deterministas)."""
         self.base_transform = transforms.Compose([
             transforms.Resize((IMG_SIZE, IMG_SIZE)),
             transforms.ToTensor(),
@@ -36,37 +36,25 @@ class ModelManager:
             self.base_transform,
             transforms.Compose([
                 transforms.Resize((IMG_SIZE, IMG_SIZE)),
-                transforms.RandomHorizontalFlip(p=1.0),
+                transforms.Lambda(lambda img: img.transpose(Image.FLIP_LEFT_RIGHT)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]),
             transforms.Compose([
                 transforms.Resize((IMG_SIZE, IMG_SIZE)),
-                transforms.RandomRotation(degrees=10),
+                transforms.Lambda(lambda img: img.rotate(5, resample=Image.BILINEAR)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]),
             transforms.Compose([
                 transforms.Resize((IMG_SIZE, IMG_SIZE)),
-                transforms.RandomRotation(degrees=15),
+                transforms.Lambda(lambda img: img.rotate(-5, resample=Image.BILINEAR)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]),
             transforms.Compose([
                 transforms.Resize((IMG_SIZE, IMG_SIZE)),
-                transforms.ColorJitter(brightness=0.2),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ]),
-            transforms.Compose([
-                transforms.Resize((IMG_SIZE, IMG_SIZE)),
-                transforms.ColorJitter(brightness=0.4),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-            ]),
-            transforms.Compose([
-                transforms.Resize((IMG_SIZE, IMG_SIZE)),
-                transforms.ColorJitter(contrast=0.2),
+                transforms.Lambda(lambda img: img.crop((4, 4, IMG_SIZE - 4, IMG_SIZE - 4)).resize((IMG_SIZE, IMG_SIZE))),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ]),
@@ -82,8 +70,9 @@ class ModelManager:
                 self.class_names = json.load(f)
 
             num_classes = len(self.class_names)
-            self.model = models.resnet50(weights=None)
-            self.model.fc = create_fc_head(self.model.fc.in_features, num_classes)
+            self.model = models.efficientnet_b0(weights=None)
+            in_features = self.model.classifier[1].in_features
+            self.model.classifier = create_fc_head(in_features, num_classes)
 
             self.model.load_state_dict(
                 torch.load(str(MODEL_PATH), map_location="cpu", weights_only=True)

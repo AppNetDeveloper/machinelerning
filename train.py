@@ -1,13 +1,15 @@
 """
-Entrenador mejorado de modelo de confecciones de frutas.
-Usa transfer learning con ResNet50 para clasificar imagenes de cajas de frutas.
+Entrenador de modelo de confecciones de frutas.
+Usa transfer learning con EfficientNet-B0 para clasificar imagenes de cajas de frutas.
 
-Mejoras:
+Caracteristicas:
+- EfficientNet-B0 (5.3M params) - optimizado para datasets pequenos
+- EMA (Exponential Moving Average) para mejor generalizacion
 - Pesos de clase para manejar desbalance
-- Early stopping para evitar sobreajuste
-- Callback de progreso para el panel web
-- Mejor data augmentation
-- Guarda historial en la base de datos
+- Early stopping con reset entre fases
+- MixUp, label smoothing, gradient clipping
+- Warmup + CosineAnnealing LR
+- AMP para GPU, checkpointing
 
 Uso directo:
     python train.py
@@ -15,6 +17,7 @@ Uso directo:
 
 import os
 import json
+import copy
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -33,14 +36,51 @@ from config import (
     VALIDATION_SPLIT, LABEL_SMOOTHING, EARLY_STOP_PATIENCE,
     WEIGHT_DECAY, MIXUP_ALPHA, GRAD_CLIP_MAX_NORM, WARMUP_EPOCHS,
     USE_AMP, NUM_WORKERS, PREFETCH_FACTOR, CHECKPOINT_EVERY, CHECKPOINT_PATH,
+    EMA_DECAY,
 )
 
 
-def create_fc_head(num_features=2048, num_classes=3):
+class EMA:
+    """Exponential Moving Average de los pesos del modelo."""
+
+    def __init__(self, model, decay=EMA_DECAY):
+        self.decay = decay
+        self.shadow = {}
+        self.backup = {}
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+
+    def update(self, model):
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.shadow:
+                self.shadow[name] = self.decay * self.shadow[name] + (1 - self.decay) * param.data
+
+    def apply_shadow(self, model):
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.shadow:
+                self.backup[name] = param.data.clone()
+                param.data = self.shadow[name]
+
+    def restore(self, model):
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.backup:
+                param.data = self.backup[name]
+        self.backup = {}
+
+    def state_dict(self):
+        return {"decay": self.decay, "shadow": self.shadow}
+
+    def load_state_dict(self, state):
+        self.decay = state["decay"]
+        self.shadow = state["shadow"]
+
+
+def create_fc_head(num_features=1280, num_classes=3):
     """Cabeza FC compartida entre entrenamiento e inferencia."""
     return nn.Sequential(
         nn.Dropout(0.3), nn.Linear(num_features, 256),
-        nn.ReLU(), nn.Dropout(0.2), nn.Linear(256, num_classes),
+        nn.BatchNorm1d(256), nn.ReLU(), nn.Dropout(0.2), nn.Linear(256, num_classes),
     )
 
 
@@ -61,14 +101,10 @@ def get_transforms():
         transforms.Resize((IMG_SIZE + 32, IMG_SIZE + 32)),
         transforms.RandomCrop(IMG_SIZE),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(15),
-        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-        transforms.RandomPerspective(distortion_scale=0.2, p=0.3),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05),
-        transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
+        transforms.RandomRotation(10),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        transforms.RandomErasing(p=0.2, scale=(0.02, 0.15)),
     ])
     val_transform = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -160,18 +196,19 @@ Dataset cargado:
 
 
 def create_model(num_classes):
-    model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
     for param in model.parameters():
         param.requires_grad = False
-    model.fc = create_fc_head(model.fc.in_features, num_classes)
-    for param in model.fc.parameters():
+    in_features = model.classifier[1].in_features
+    model.classifier = create_fc_head(in_features, num_classes)
+    for param in model.classifier.parameters():
         param.requires_grad = True
     return model
 
 
 def unfreeze_layers(model):
     for name, param in model.named_parameters():
-        if "layer3" in name or "layer4" in name or "fc" in name:
+        if "features.6" in name or "features.7" in name or "classifier" in name:
             param.requires_grad = True
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
@@ -234,12 +271,13 @@ def validate(model, val_loader, criterion, device):
     return avg_loss, accuracy
 
 
-def save_checkpoint(model, optimizer, scheduler, scaler, epoch, phase, best_val_acc, history, path):
+def save_checkpoint(model, optimizer, scheduler, scaler, epoch, phase, best_val_acc, history, path, ema=None):
     torch.save({
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),
         "scheduler_state": scheduler.state_dict(),
         "scaler_state": scaler.state_dict() if scaler else None,
+        "ema_state": ema.state_dict() if ema else None,
         "epoch": epoch,
         "phase": phase,
         "best_val_acc": best_val_acc,
@@ -247,7 +285,7 @@ def save_checkpoint(model, optimizer, scheduler, scaler, epoch, phase, best_val_
     }, str(path))
 
 
-def load_checkpoint(path, model, optimizer=None, scheduler=None, scaler=None):
+def load_checkpoint(path, model, optimizer=None, scheduler=None, scaler=None, ema=None):
     if not Path(path).exists():
         return None
     ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
@@ -258,6 +296,8 @@ def load_checkpoint(path, model, optimizer=None, scheduler=None, scaler=None):
         scheduler.load_state_dict(ckpt["scheduler_state"])
     if scaler and ckpt.get("scaler_state"):
         scaler.load_state_dict(ckpt["scaler_state"])
+    if ema and ckpt.get("ema_state"):
+        ema.load_state_dict(ckpt["ema_state"])
     return ckpt
 
 
@@ -314,9 +354,9 @@ def run_training_sync(progress_callback=None):
     start_phase, start_epoch = 1, 0
     if Path(str(CHECKPOINT_PATH)).exists():
         report(f"Checkpoint encontrado, reanudando...", phase="resume")
-        optimizer_tmp = optim.AdamW(model.fc.parameters(), lr=LR_HEAD)
+        optimizer_tmp = optim.AdamW(model.classifier.parameters(), lr=LR_HEAD)
         scheduler_tmp = optim.lr_scheduler.ReduceLROnPlateau(optimizer_tmp, patience=3, factor=0.5)
-        ckpt = load_checkpoint(CHECKPOINT_PATH, model, optimizer_tmp, scheduler_tmp, scaler)
+        ckpt = load_checkpoint(CHECKPOINT_PATH, model, optimizer_tmp, scheduler_tmp, scaler, ema)
         if ckpt:
             start_phase = ckpt.get("phase", 1)
             start_epoch = ckpt.get("epoch", 0) + 1
@@ -324,9 +364,12 @@ def run_training_sync(progress_callback=None):
             history = ckpt.get("history", history)
             report(f"Reanudando desde fase {start_phase}, epoca {start_epoch}, mejor val_acc: {best_val_acc:.1f}%", phase="resume")
 
+    # EMA
+    ema = EMA(model, decay=EMA_DECAY)
+
     # FASE 1
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
-    optimizer = optim.AdamW(model.fc.parameters(), lr=LR_HEAD, weight_decay=WEIGHT_DECAY)
+    optimizer = optim.AdamW(model.classifier.parameters(), lr=LR_HEAD, weight_decay=WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5)
 
     phase1_range = range(start_epoch if start_phase == 1 else 0, EPOCHS_HEAD)
@@ -334,7 +377,10 @@ def run_training_sync(progress_callback=None):
         report(f"FASE 1: Entrenando capa clasificadora ({EPOCHS_HEAD} epocas)", phase="phase1")
         for epoch in phase1_range:
             train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device, scaler=scaler)
+            ema.update(model)
+            ema.apply_shadow(model)
             val_loss, val_acc = validate(model, val_loader, criterion, device)
+            ema.restore(model)
             scheduler.step(val_loss)
             lr = optimizer.param_groups[0]["lr"]
             history["train_loss"].append(train_loss); history["train_acc"].append(train_acc)
@@ -344,12 +390,14 @@ def run_training_sync(progress_callback=None):
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc; epochs_no_improve = 0
+                ema.apply_shadow(model)
                 torch.save(model.state_dict(), str(MODEL_PATH))
+                ema.restore(model)
             else:
                 epochs_no_improve += 1
 
             if (epoch + 1) % CHECKPOINT_EVERY == 0:
-                save_checkpoint(model, optimizer, scheduler, scaler, epoch, 1, best_val_acc, history, CHECKPOINT_PATH)
+                save_checkpoint(model, optimizer, scheduler, scaler, epoch, 1, best_val_acc, history, CHECKPOINT_PATH, ema)
 
             if epochs_no_improve >= EARLY_STOP_PATIENCE:
                 report(f"Early stopping Fase 1 en epoca {epoch+1}", phase="early_stop", epoch=epoch+1, total_epochs=total_epochs)
@@ -361,12 +409,13 @@ def run_training_sync(progress_callback=None):
                 train_loss=train_loss, train_acc=train_acc, val_loss=val_loss, val_acc=val_acc, lr=lr, best_val_acc=best_val_acc,
             )
             if cont is False:
-                save_checkpoint(model, optimizer, scheduler, scaler, epoch, 1, best_val_acc, history, CHECKPOINT_PATH)
+                save_checkpoint(model, optimizer, scheduler, scaler, epoch, 1, best_val_acc, history, CHECKPOINT_PATH, ema)
                 return {"status": "cancelled", "history": history, "best_val_acc": best_val_acc}
         start_epoch = 0
 
     # FASE 2
-    report(f"FASE 2: Fine-tuning layer3+4 ({EPOCHS_FINETUNE} epocas)", phase="phase2")
+    report(f"FASE 2: Fine-tuning capas altas ({EPOCHS_FINETUNE} epocas)", phase="phase2")
+    epochs_no_improve = 0  # Reset early stopping counter para fase 2
     unfreeze_layers(model)
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
     optimizer_ft = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=LR_FINETUNE, weight_decay=WEIGHT_DECAY)
@@ -376,7 +425,10 @@ def run_training_sync(progress_callback=None):
 
     for epoch in range(start_epoch if start_phase == 2 else 0, EPOCHS_FINETUNE):
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer_ft, device, max_grad_norm=GRAD_CLIP_MAX_NORM, scaler=scaler)
+        ema.update(model)
+        ema.apply_shadow(model)
         val_loss, val_acc = validate(model, val_loader, criterion, device)
+        ema.restore(model)
         scheduler_ft.step()
         lr = optimizer_ft.param_groups[0]["lr"]
         epoch_num = EPOCHS_HEAD + epoch + 1
@@ -387,12 +439,14 @@ def run_training_sync(progress_callback=None):
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc; epochs_no_improve = 0
+            ema.apply_shadow(model)
             torch.save(model.state_dict(), str(MODEL_PATH))
+            ema.restore(model)
         else:
             epochs_no_improve += 1
 
         if (epoch + 1) % CHECKPOINT_EVERY == 0:
-            save_checkpoint(model, optimizer_ft, scheduler_ft, scaler, epoch, 2, best_val_acc, history, CHECKPOINT_PATH)
+            save_checkpoint(model, optimizer_ft, scheduler_ft, scaler, epoch, 2, best_val_acc, history, CHECKPOINT_PATH, ema)
 
         if epochs_no_improve >= EARLY_STOP_PATIENCE:
             report(f"Early stopping en epoca {epoch_num}", phase="early_stop", epoch=epoch_num, total_epochs=total_epochs)
@@ -404,8 +458,13 @@ def run_training_sync(progress_callback=None):
             train_loss=train_loss, train_acc=train_acc, val_loss=val_loss, val_acc=val_acc, lr=lr, best_val_acc=best_val_acc,
         )
         if cont is False:
-            save_checkpoint(model, optimizer_ft, scheduler_ft, scaler, epoch, 2, best_val_acc, history, CHECKPOINT_PATH)
+            save_checkpoint(model, optimizer_ft, scheduler_ft, scaler, epoch, 2, best_val_acc, history, CHECKPOINT_PATH, ema)
             return {"status": "cancelled", "history": history, "best_val_acc": best_val_acc}
+
+    # Guardar modelo final con pesos EMA
+    ema.apply_shadow(model)
+    torch.save(model.state_dict(), str(MODEL_PATH))
+    ema.restore(model)
 
     # Limpieza final
     with open(str(CLASES_PATH), "w") as f:
