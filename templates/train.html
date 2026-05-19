@@ -65,14 +65,27 @@
 {% endif %}
 
 <!-- Augment Dataset -->
-{% if dataset_stats.total_images < 300 %}
+{% set needs_augment = [] %}
+{% for class_name, info in dataset_stats.classes.items() %}
+    {% if info.count < 300 %}
+        {% if needs_augment.append(1) %}{% endif %}
+    {% endif %}
+{% endfor %}
+{% if needs_augment|length > 0 %}
 <div class="card mb-4 border-warning">
     <div class="card-header bg-warning text-dark">
         <i class="bi bi-exclamation-triangle"></i> Dataset Pequeño
     </div>
     <div class="card-body">
-        <p>Tienes <strong>{{ dataset_stats.total_images }} imagenes</strong>. Se recomienda minimo 300 por clase para buenos resultados.</p>
-        <p class="mb-2">Puedes augmentar el dataset generando variaciones de las fotos existentes:</p>
+        <p>Algunas clases tienen menos de 300 imagenes:</p>
+        <ul>
+        {% for class_name, info in dataset_stats.classes.items() %}
+            {% if info.count < 300 %}
+            <li><strong>{{ class_name }}</strong>: {{ info.count }} imagenes (minimo recomendado: 300)</li>
+            {% endif %}
+        {% endfor %}
+        </ul>
+        <p class="mb-2">Augmenta el dataset generando variaciones de las fotos existentes:</p>
         <form method="POST" action="/train/augment" class="d-inline">
             <div class="input-group mb-2" style="max-width: 300px;">
                 <span class="input-group-text">Objetivo por clase</span>
