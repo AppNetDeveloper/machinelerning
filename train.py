@@ -357,6 +357,9 @@ def run_training_sync(progress_callback=None):
     history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": [], "lr": [], "phase": []}
     total_epochs = EPOCHS_HEAD + EPOCHS_FINETUNE
 
+    # EMA (antes del checkpoint para que este disponible al cargar)
+    ema = EMA(model, decay=EMA_DECAY)
+
     # Intentar reanudar desde checkpoint
     start_phase, start_epoch = 1, 0
     if Path(str(CHECKPOINT_PATH)).exists():
@@ -370,9 +373,6 @@ def run_training_sync(progress_callback=None):
             best_val_acc = ckpt.get("best_val_acc", 0.0)
             history = ckpt.get("history", history)
             report(f"Reanudando desde fase {start_phase}, epoca {start_epoch}, mejor val_acc: {best_val_acc:.1f}%", phase="resume")
-
-    # EMA
-    ema = EMA(model, decay=EMA_DECAY)
 
     # FASE 1
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
