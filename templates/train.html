@@ -64,6 +64,32 @@
 </div>
 {% endif %}
 
+<!-- Augment Dataset -->
+{% if dataset_stats.total_images < 300 %}
+<div class="card mb-4 border-warning">
+    <div class="card-header bg-warning text-dark">
+        <i class="bi bi-exclamation-triangle"></i> Dataset Pequeño
+    </div>
+    <div class="card-body">
+        <p>Tienes <strong>{{ dataset_stats.total_images }} imagenes</strong>. Se recomienda minimo 300 por clase para buenos resultados.</p>
+        <p class="mb-2">Puedes augmentar el dataset generando variaciones de las fotos existentes:</p>
+        <form method="POST" action="/train/augment" class="d-inline">
+            <div class="input-group mb-2" style="max-width: 300px;">
+                <span class="input-group-text">Objetivo por clase</span>
+                <input type="number" name="target" value="400" min="100" max="1000" class="form-control">
+            </div>
+            <button type="submit" class="btn btn-warning"
+                    onclick="return confirm('Augmentar dataset? Esto generara variaciones de las fotos existentes.')">
+                <i class="bi bi-images"></i> Augmentar Dataset
+            </button>
+        </form>
+        <small class="text-muted d-block mt-2">
+            <i class="bi bi-info-circle"></i> Genera rotaciones, brillo, contraste, etc. de las fotos actuales.
+        </small>
+    </div>
+</div>
+{% endif %}
+
 {% if dataset_stats.classes %}
 <div class="card mb-4">
     <div class="card-header"><i class="bi bi-table"></i> Detalle por Clase</div>

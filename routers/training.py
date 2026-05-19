@@ -95,6 +95,14 @@ training_state = {
 }
 training_lock = asyncio.Lock()
 
+# ─── Estado global de augmentacion ──────────────────────────────
+augment_state = {
+    "running": False,
+    "progress": [],
+    "done": False,
+}
+augment_lock = asyncio.Lock()
+
 
 async def get_user_or_redirect(request: Request):
     user = await get_current_user(request)
@@ -219,3 +227,119 @@ async def train_progress():
             await asyncio.sleep(0.5)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/train/augment")
+async def train_augment(request: Request):
+    """Augmenta el dataset generando variaciones de imagenes existentes."""
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    async with augment_lock:
+        if augment_state["running"]:
+            return RedirectResponse("/train?error=augment_running", status_code=303)
+        augment_state["running"] = True
+        augment_state["progress"] = []
+        augment_state["done"] = False
+
+    form = await request.form()
+    target = int(form.get("target", 400))
+
+    asyncio.create_task(_run_augment_background(target))
+
+    return RedirectResponse("/train?augment=started", status_code=303)
+
+
+async def _run_augment_background(target: int):
+    """Ejecuta la augmentacion en segundo plano."""
+    import random
+    from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+
+    extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+
+    def get_images(class_dir):
+        return [f for f in class_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in extensions]
+
+    def augment_image(img):
+        augmentations = [
+            lambda im: im.transpose(Image.FLIP_LEFT_RIGHT),
+            lambda im: im.rotate(random.uniform(-25, 25), fillcolor=(0, 0, 0)),
+            lambda im: ImageEnhance.Brightness(im).enhance(random.uniform(0.7, 1.3)),
+            lambda im: ImageEnhance.Contrast(im).enhance(random.uniform(0.7, 1.3)),
+            lambda im: ImageEnhance.Color(im).enhance(random.uniform(0.7, 1.3)),
+            lambda im: ImageEnhance.Sharpness(im).enhance(random.uniform(0.5, 1.5)),
+            lambda im: im.filter(ImageFilter.GaussianBlur(radius=random.uniform(0.5, 1.5))),
+            lambda im: ImageOps.posterize(im, bits=random.choice([4, 5, 6])),
+            lambda im: im.transform(im.size, Image.AFFINE,
+                                    (1, random.uniform(-0.1, 0.1), random.randint(-10, 10),
+                                     random.uniform(-0.1, 0.1), 1, random.randint(-10, 10)),
+                                    fillcolor=(0, 0, 0)),
+        ]
+        num_aug = random.randint(2, 4)
+        selected = random.sample(augmentations, min(num_aug, len(augmentations)))
+        result = img.copy()
+        for aug in selected:
+            try:
+                result = aug(result)
+            except Exception:
+                continue
+        return result
+
+    try:
+        classes = [d for d in sorted(DATASET_DIR.iterdir()) if d.is_dir()]
+        total_generated = 0
+
+        for class_dir in classes:
+            existing = get_images(class_dir)
+            current = len(existing)
+
+            if current >= target:
+                augment_state["progress"].append({
+                    "message": f"{class_dir.name}: {current} imagenes (ya cumple)",
+                    "phase": "augment"
+                })
+                continue
+
+            needed = target - current
+            augment_state["progress"].append({
+                "message": f"{class_dir.name}: {current} -> generando {needed} imagenes...",
+                "phase": "augment"
+            })
+
+            generated = 0
+            while generated < needed:
+                src = random.choice(existing)
+                try:
+                    img = Image.open(src).convert('RGB')
+                    aug_img = augment_image(img)
+                    aug_name = f"aug_{generated:04d}_{src.stem}.jpg"
+                    aug_path = class_dir / aug_name
+                    if not aug_path.exists():
+                        aug_img.save(str(aug_path), 'JPEG', quality=90)
+                        generated += 1
+                        total_generated += 1
+                except Exception:
+                    continue
+
+            final = len(get_images(class_dir))
+            augment_state["progress"].append({
+                "message": f"{class_dir.name}: {final} imagenes completado",
+                "phase": "augment"
+            })
+
+        augment_state["progress"].append({
+            "message": f"Augmentacion completada! {total_generated} imagenes generadas",
+            "phase": "done"
+        })
+        augment_state["done"] = True
+
+    except Exception as e:
+        augment_state["progress"].append({
+            "message": f"ERROR: {str(e)}",
+            "phase": "error"
+        })
+
+    finally:
+        augment_state["running"] = False
