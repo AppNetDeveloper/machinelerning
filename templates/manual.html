@@ -1,0 +1,331 @@
+{% extends "base.html" %}
+{% block title %}Manual de Uso - Confecciones{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2><i class="bi bi-book"></i> Manual de Uso</h2>
+    <p>Guia completa para usar el sistema de vision industrial</p>
+</div>
+
+<div class="row g-4">
+    <!-- Sidebar navegacion -->
+    <div class="col-md-3">
+        <div class="card sticky-top" style="top: 20px;">
+            <div class="card-body p-2">
+                <nav class="nav flex-column">
+                    <a class="nav-link text-light" href="#inicio">Inicio Rapido</a>
+                    <a class="nav-link text-light" href="#dataset">Dataset</a>
+                    <a class="nav-link text-light" href="#camaras">Camaras</a>
+                    <a class="nav-link text-light" href="#entrenamiento">Entrenamiento</a>
+                    <a class="nav-link text-light" href="#predicciones">Predicciones</a>
+                    <a class="nav-link text-light" href="#qr">Escaner QR</a>
+                    <a class="nav-link text-light" href="#api">API REST</a>
+                    <a class="nav-link text-light" href="#mqtt">MQTT / IoT</a>
+                    <a class="nav-link text-light" href="#problemas">Solucion de Problemas</a>
+                </nav>
+            </div>
+        </div>
+    </div>
+
+    <!-- Contenido principal -->
+    <div class="col-md-9">
+
+        <!-- Inicio Rapido -->
+        <div class="card mb-4" id="inicio">
+            <div class="card-header"><i class="bi bi-rocket-takeoff"></i> Inicio Rapido</div>
+            <div class="card-body">
+                <h5>1. Acceder al sistema</h5>
+                <p>Abre el navegador en <code>http://localhost:8000</code> e inicia sesion:</p>
+                <ul>
+                    <li><strong>Usuario:</strong> <code>admin</code></li>
+                    <li><strong>Password:</strong> <code>123456789</code></li>
+                </ul>
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle"></i> Cambia el password por defecto en <a href="/settings" class="alert-link">Configuracion</a>
+                </div>
+
+                <h5>2. Flujo basico</h5>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <span class="badge bg-accent p-2">1. Subir fotos</span>
+                    <i class="bi bi-arrow-right"></i>
+                    <span class="badge bg-accent p-2">2. Entrenar modelo</span>
+                    <i class="bi bi-arrow-right"></i>
+                    <span class="badge bg-accent p-2">3. Predecir</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dataset -->
+        <div class="card mb-4" id="dataset">
+            <div class="card-header"><i class="bi bi-images"></i> Gestion del Dataset</div>
+            <div class="card-body">
+                <h5>Crear clases</h5>
+                <p>Ve a <a href="/dataset">Dataset</a> y crea una clase por cada tipo de confeccion:</p>
+                <ol>
+                    <li>Escribe el nombre de la clase (ej: <code>manzana</code>)</li>
+                    <li>Clic en "Crear Clase"</li>
+                    <li>Repite para cada tipo</li>
+                </ol>
+
+                <h5>Subir imagenes</h5>
+                <p>Selecciona una clase y sube fotos:</p>
+                <ul>
+                    <li><strong>Minimo:</strong> 100 fotos por clase</li>
+                    <li><strong>Recomendado:</strong> 300-500 fotos por clase</li>
+                    <li><strong>Formatos:</strong> JPG, PNG, BMP, WebP</li>
+                </ul>
+
+                <h5>Consejos para buenas fotos</h5>
+                <ul>
+                    <li>Varia el angulo de la camara</li>
+                    <li>Incluye diferentes iluminaciones</li>
+                    <li>Muestra la caja completa y parcial</li>
+                    <li>Incluye casos dificiles (danadas, parciales)</li>
+                    <li>Fondo variado (no siempre el mismo)</li>
+                </ul>
+
+                <h5>Augmentacion automatica</h5>
+                <p>Si tienes menos de 300 fotos por clase, puedes usar el boton "Augmentar Dataset" en <a href="/train">Entrenamiento</a> para generar variaciones automaticas.</p>
+            </div>
+        </div>
+
+        <!-- Camaras -->
+        <div class="card mb-4" id="camaras">
+            <div class="card-header"><i class="bi bi-camera-video"></i> Camaras</div>
+            <div class="card-body">
+                <h5>Tipos de camara</h5>
+
+                <h6><i class="bi bi-usb-symbol"></i> Camaras USB</h6>
+                <ol>
+                    <li>Conecta la camara USB al servidor</li>
+                    <li>Ve a <a href="/camera">Camaras</a></li>
+                    <li>Clic en "Escanear camaras USB"</li>
+                    <li>Selecciona la camara encontrada</li>
+                </ol>
+
+                <h6><i class="bi bi-wifi"></i> Camaras IP</h6>
+                <ol>
+                    <li>Ve a <a href="/camera">Camaras</a></li>
+                    <li>En "Anadir Camara IP" completa:</li>
+                    <ul>
+                        <li><strong>Nombre:</strong> Identificador descriptivo</li>
+                        <li><strong>Protocolo:</strong> RTSP, HTTP o HTTPS</li>
+                        <li><strong>IP:</strong> Direccion de la camara</li>
+                        <li><strong>Puerto:</strong> 554 (RTSP) o 80 (HTTP)</li>
+                        <li><strong>Ruta:</strong> /stream1 o similar</li>
+                    </ul>
+                    <li>Clic en "Registrar Camara IP"</li>
+                </ol>
+
+                <h5>Capturar fotos con camara</h5>
+                <ol>
+                    <li>Selecciona una camara (icono ojo)</li>
+                    <li>Espera que cargue la vista previa</li>
+                    <li>Selecciona la clase destino</li>
+                    <li>Clic en "CAPTURAR AHORA"</li>
+                </ol>
+
+                <h5>Editar camaras</h5>
+                <p>Clic en el icono <i class="bi bi-pencil"></i> para modificar nombre, URL o callback.</p>
+            </div>
+        </div>
+
+        <!-- Entrenamiento -->
+        <div class="card mb-4" id="entrenamiento">
+            <div class="card-header"><i class="bi bi-gpu-card"></i> Entrenamiento</div>
+            <div class="card-body">
+                <h5>Preparar el entrenamiento</h5>
+                <ol>
+                    <li>Ve a <a href="/train">Entrenamiento</a></li>
+                    <li>Revisa las estadisticas del dataset</li>
+                    <li>Si alguna clase tiene menos de 300 fotos, usa "Augmentar Dataset"</li>
+                </ol>
+
+                <h5>Iniciar entrenamiento</h5>
+                <ol>
+                    <li>Clic en "Iniciar Entrenamiento"</li>
+                    <li>Observa el progreso en tiempo real</li>
+                    <li>El proceso tiene 2 fases:</li>
+                    <ul>
+                        <li><strong>Fase 1:</strong> Entrena solo la capa clasificadora (10 epocas)</li>
+                        <li><strong>Fase 2:</strong> Fine-tuning de capas altas (50 epocas)</li>
+                    </ul>
+                </ol>
+
+                <h5>Indicadores importantes</h5>
+                <table class="table table-dark table-sm">
+                    <tr><td><strong>Train Loss</strong></td><td>Debe disminuir gradualmente</td></tr>
+                    <tr><td><strong>Val Loss</strong></td><td>Debe disminuir sin alejarse mucho del Train</td></tr>
+                    <tr><td><strong>Val Acc</strong></td><td>Porcentaje de acierto en validacion</td></tr>
+                    <tr><td><strong>LR</strong></td><td>Learning rate (se ajusta automaticamente)</td></tr>
+                </table>
+
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle"></i> <strong>Tiempo estimado:</strong> 5-30 minutos dependiendo del dataset y hardware.
+                </div>
+            </div>
+        </div>
+
+        <!-- Predicciones -->
+        <div class="card mb-4" id="predicciones">
+            <div class="card-header"><i class="bi bi-search"></i> Predicciones</div>
+            <div class="card-body">
+                <h5>Predecir una imagen</h5>
+                <ol>
+                    <li>Ve a <a href="/predict">Predicciones</a></li>
+                    <li>Sube una imagen o arrastrala al area</li>
+                    <li>Clic en "Predecir"</li>
+                    <li>Revisa el resultado:</li>
+                    <ul>
+                        <li><strong>Clase predicha:</strong> Tipo de confeccion detectado</li>
+                        <li><strong>Confianza:</strong> Porcentaje de certeza (mayor a 80% es bueno)</li>
+                        <li><strong>Barra verde:</strong> Resultado confiable</li>
+                        <li><strong>Barra roja:</strong> Resultado incierto</li>
+                    </ul>
+                </ol>
+
+                <h5>Interpretar resultados</h5>
+                <ul>
+                    <li><strong>Confianza > 90%:</strong> Muy confiable</li>
+                    <li><strong>Confianza 70-90%:</strong> Confiable</li>
+                    <li><strong>Confianza < 70%:</strong> Poco confiable, verificar manualmente</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- QR -->
+        <div class="card mb-4" id="qr">
+            <div class="card-header"><i class="bi bi-qr-code"></i> Escaner QR / Codigos de Barras</div>
+            <div class="card-body">
+                <h5>Escanear codigos</h5>
+                <ol>
+                    <li>Ve a <a href="/qr">QR Escaner</a></li>
+                    <li>Selecciona una camara</li>
+                    <li>Clic en "Escanear QR"</li>
+                    <li>Los resultados aparecen en pantalla</li>
+                </ol>
+
+                <h5>Codigos soportados</h5>
+                <ul>
+                    <li><strong>QR Code:</strong> Codigos QR 2D</li>
+                    <li><strong>EAN-13/UPC:</strong> Codigos de barras de productos</li>
+                    <li><strong>Code 128/39:</strong> Codigos alfanumericos</li>
+                </ul>
+
+                <h5>Historial</h5>
+                <p>Todos los escaneos se guardan automaticamente en el historial.</p>
+            </div>
+        </div>
+
+        <!-- API -->
+        <div class="card mb-4" id="api">
+            <div class="card-header"><i class="bi bi-code-slash"></i> API REST</div>
+            <div class="card-body">
+                <h5>Endpoints principales</h5>
+                <table class="table table-dark table-sm">
+                    <thead><tr><th>Endpoint</th><th>Metodo</th><th>Descripcion</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>/api/status</code></td><td>GET</td><td>Estado del modelo</td></tr>
+                        <tr><td><code>/api/predecir</code></td><td>POST</td><td>Clasificar imagen</td></tr>
+                        <tr><td><code>/api/qr/escanear</code></td><td>POST</td><td>Escanear QR desde camara</td></tr>
+                        <tr><td><code>/api/disparar/[slug]</code></td><td>POST</td><td>Trigger IoT por camara</td></tr>
+                    </tbody>
+                </table>
+
+                <h5>Ejemplo de prediccion</h5>
+                <pre class="bg-dark p-3 rounded"><code>curl -X POST http://localhost:8000/api/predecir -F "file=@foto.jpg"</code></pre>
+
+                <h5>Documentacion completa</h5>
+                <p>Visita <a href="/api-docs">API Docs</a> para ver todos los endpoints disponibles.</p>
+            </div>
+        </div>
+
+        <!-- MQTT -->
+        <div class="card mb-4" id="mqtt">
+            <div class="card-header"><i class="bi bi-broadcast"></i> Integracion MQTT / IoT</div>
+            <div class="card-body">
+                <h5>Configurar MQTT</h5>
+                <ol>
+                    <li>Ve a <a href="/mqtt">MQTT</a></li>
+                    <li>Ingresa los datos del broker:</li>
+                    <ul>
+                        <li><strong>Host:</strong> Direccion del broker (ej: mqtt://192.168.1.100)</li>
+                        <li><strong>Puerto:</strong> 1883 (default)</li>
+                        <li><strong>Usuario/Password:</strong> Credenciales del broker</li>
+                    </ul>
+                    <li>Clic en "Conectar"</li>
+                </ol>
+
+                <h5>Configurar triggers</h5>
+                <ol>
+                    <li>Ve a <a href="/camera">Camaras</a></li>
+                    <li>Edita una camara (icono lapiz)</li>
+                    <li>Configura la URL de callback</li>
+                    <li>Activa el callback</li>
+                </ol>
+
+                <h5>Flujo IoT</h5>
+                <pre class="bg-dark p-3 rounded"><code>Sensor fisico → POST /api/disparar/[slug] → Captura → ML + QR → MQTT/Webhook</code></pre>
+            </div>
+        </div>
+
+        <!-- Solucion de problemas -->
+        <div class="card mb-4" id="problemas">
+            <div class="card-header"><i class="bi bi-tools"></i> Solucion de Problemas</div>
+            <div class="card-body">
+                <h5>Entrenamiento</h5>
+
+                <h6><i class="bi bi-x-circle text-danger"></i> "Val Acc muy bajo (< 50%)"</h6>
+                <ul>
+                    <li>Necesitas mas fotos (minimo 300 por clase)</li>
+                    <li>Las clases deben ser visualmente distintas</li>
+                    <li>Usa "Augmentar Dataset" si tienes pocas fotos</li>
+                </ul>
+
+                <h6><i class="bi bi-x-circle text-danger"></i> "CUDA out of memory"</h6>
+                <ul>
+                    <li>Reduce BATCH_SIZE en config.py</li>
+                    <li>Cierra otras aplicaciones que usen GPU</li>
+                </ul>
+
+                <h6><i class="bi bi-x-circle text-danger"></i> "Error DNNL bf16"</h6>
+                <ul>
+                    <li>Ya esta corregido automaticamente</li>
+                    <li>Si persiste, reinicia el servidor</li>
+                </ul>
+
+                <h5>Camaras</h5>
+
+                <h6><i class="bi bi-x-circle text-danger"></i> "Camara no detectada"</h6>
+                <ul>
+                    <li>Verifica conexion USB</li>
+                    <li>Prueba con otro indice (0, 1, 2...)</li>
+                    <li>Verifica permisos: <code>sudo usermod -aG video $USER</code></li>
+                </ul>
+
+                <h6><i class="bi bi-x-circle text-danger"></i> "Camara IP no conecta"</h6>
+                <ul>
+                    <li>Verifica la IP: <code>ping 192.168.1.100</code></li>
+                    <li>Prueba la URL RTSP en VLC</li>
+                    <li>Verifica usuario y password</li>
+                </ul>
+
+                <h5>Errores comunes</h5>
+
+                <h6><i class="bi bi-x-circle text-danger"></i> "FileNotFoundError"</h6>
+                <ul>
+                    <li>Dataset corrupto - re-entrenar desde cero</li>
+                    <li>Eliminar checkpoint: <code>rm checkpoint.pth</code></li>
+                </ul>
+
+                <h6><i class="bi bi-x-circle text-danger"></i> "Puerto en uso"</h6>
+                <ul>
+                    <li><code>lsof -i :8000</code> para ver procesos</li>
+                    <li><code>kill -9 [PID]</code> para matar proceso</li>
+                </ul>
+            </div>
+        </div>
+
+    </div>
+</div>
+{% endblock %}

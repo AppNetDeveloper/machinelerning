@@ -69,3 +69,15 @@ async def api_docs_page(request: Request):
         "request": request,
         "user": user,
     })
+
+
+@router.get("/manual", response_class=HTMLResponse)
+async def manual_page(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    return templates.TemplateResponse(request, "manual.html", {
+        "request": request,
+        "user": user,
+    })
