@@ -363,16 +363,20 @@ def run_training_sync(progress_callback=None):
     # Intentar reanudar desde checkpoint
     start_phase, start_epoch = 1, 0
     if Path(str(CHECKPOINT_PATH)).exists():
-        report(f"Checkpoint encontrado, reanudando...", phase="resume")
-        optimizer_tmp = optim.AdamW(model.classifier.parameters(), lr=LR_HEAD)
-        scheduler_tmp = optim.lr_scheduler.ReduceLROnPlateau(optimizer_tmp, patience=3, factor=0.5)
-        ckpt = load_checkpoint(CHECKPOINT_PATH, model, optimizer_tmp, scheduler_tmp, scaler, ema)
-        if ckpt:
-            start_phase = ckpt.get("phase", 1)
-            start_epoch = ckpt.get("epoch", 0) + 1
-            best_val_acc = ckpt.get("best_val_acc", 0.0)
-            history = ckpt.get("history", history)
-            report(f"Reanudando desde fase {start_phase}, epoca {start_epoch}, mejor val_acc: {best_val_acc:.1f}%", phase="resume")
+        try:
+            report(f"Checkpoint encontrado, reanudando...", phase="resume")
+            optimizer_tmp = optim.AdamW(model.classifier.parameters(), lr=LR_HEAD)
+            scheduler_tmp = optim.lr_scheduler.ReduceLROnPlateau(optimizer_tmp, patience=3, factor=0.5)
+            ckpt = load_checkpoint(CHECKPOINT_PATH, model, optimizer_tmp, scheduler_tmp, scaler, ema)
+            if ckpt:
+                start_phase = ckpt.get("phase", 1)
+                start_epoch = ckpt.get("epoch", 0) + 1
+                best_val_acc = ckpt.get("best_val_acc", 0.0)
+                history = ckpt.get("history", history)
+                report(f"Reanudando desde fase {start_phase}, epoca {start_epoch}, mejor val_acc: {best_val_acc:.1f}%", phase="resume")
+        except Exception as e:
+            report(f"Error cargando checkpoint, iniciando desde cero: {e}", phase="warning")
+            start_phase, start_epoch = 1, 0
 
     # FASE 1
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
