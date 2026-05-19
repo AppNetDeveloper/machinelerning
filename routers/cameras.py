@@ -10,7 +10,8 @@ import asyncio
 from config import TEMPLATES_DIR
 from database import (
     get_dataset_stats, save_qr_scan, get_qr_scans,
-    create_camera, get_camera_by_slug, get_all_cameras, delete_camera_db,
+    create_camera, get_camera_by_id, get_camera_by_slug,
+    get_all_cameras, update_camera_db, delete_camera_db,
 )
 from auth import get_current_user
 from camera import camera_manager
@@ -142,6 +143,49 @@ async def camera_remove(request: Request):
 
     camera_manager.remove_camera(cam_id)
     return RedirectResponse("/camera?success=Camara+eliminada", status_code=303)
+
+
+@router.post("/camera/edit")
+async def camera_edit(request: Request):
+    user = await get_user_or_redirect(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    form = await request.form()
+    cam_id = form.get("camera_id", "").strip()
+    name = form.get("name", "").strip()
+    source = form.get("source", "").strip()
+    callback_url = form.get("callback_url", "").strip()
+    callback_active = "true" if form.get("callback_active") else "false"
+
+    if not cam_id or not name or not source:
+        return RedirectResponse("/camera?error=Datos+incompletos", status_code=303)
+
+    cam = await get_camera_by_id(int(cam_id))
+    if not cam:
+        return RedirectResponse("/camera?error=Camara+no+encontrada", status_code=303)
+
+    cam_type = cam["camera_type"]
+    resolution = cam.get("resolution", "")
+
+    if cam_type == "ip":
+        test = camera_manager.test_ip_camera(source)
+        if "error" in test:
+            return RedirectResponse(f"/camera?error={test['error']}", status_code=303)
+        resolution = test.get("resolution", resolution)
+
+    await update_camera_db(
+        int(cam_id), name=name, source=source,
+        resolution=resolution, callback_url=callback_url,
+        callback_active=callback_active,
+    )
+
+    camera_manager.update_camera(
+        cam_id, name, source, cam_type,
+        resolution, callback_url, callback_active,
+    )
+
+    return RedirectResponse(f"/camera?success=Camara+{name}+actualizada", status_code=303)
 
 
 @router.get("/camera/stream/{camera_id}")

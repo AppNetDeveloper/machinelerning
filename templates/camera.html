@@ -127,6 +127,10 @@
                                         onclick="selectCamera('{{ cam.id }}', '{{ cam.name }}')">
                                     <i class="bi bi-eye"></i>
                                 </button>
+                                <button class="btn btn-sm btn-outline-warning"
+                                        onclick="openEditModal('{{ cam.id }}', '{{ cam.name }}', '{{ cam.source }}', '{{ cam.callback_url }}', '{{ cam.callback_active }}')">
+                                    <i class="bi bi-pencil"></i>
+                                </button>
                                 <form method="POST" action="/camera/remove" style="display:inline;">
                                     <input type="hidden" name="camera_id" value="{{ cam.id }}">
                                     <button type="submit" class="btn btn-sm btn-outline-danger"
@@ -216,6 +220,47 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+</div>
+<!-- Modal Edicion Camara -->
+<div class="modal fade" id="editCameraModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark text-light">
+            <div class="modal-header" style="border-color: rgba(255,255,255,0.1);">
+                <h5 class="modal-title"><i class="bi bi-pencil"></i> Editar Camara</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="/camera/edit">
+                <div class="modal-body">
+                    <input type="hidden" name="camera_id" id="editCamId">
+                    <div class="mb-3">
+                        <label class="form-label">Nombre</label>
+                        <input type="text" name="name" id="editCamName" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">URL / Fuente</label>
+                        <input type="text" name="source" id="editCamSource" class="form-control" required>
+                        <small class="text-muted">RTSP, HTTP, o indice USB</small>
+                    </div>
+                    <hr style="border-color: rgba(255,255,255,0.1);">
+                    <div class="mb-3">
+                        <label class="form-label">URL de callback</label>
+                        <input type="url" name="callback_url" id="editCamCallback" class="form-control"
+                               placeholder="https://tu-servidor.com/webhook">
+                    </div>
+                    <div class="mb-3 form-check form-switch">
+                        <input class="form-check-input" type="checkbox" name="callback_active" id="editCamCallbackActive">
+                        <label class="form-check-label" for="editCamCallbackActive">Callback activo</label>
+                    </div>
+                </div>
+                <div class="modal-footer" style="border-color: rgba(255,255,255,0.1);">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-accent">
+                        <i class="bi bi-check-lg"></i> Guardar Cambios
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
@@ -463,5 +508,15 @@ function takeSnapshot() {
 }
 
 updateUrlHint();
+
+// Edit camera modal
+function openEditModal(id, name, source, callbackUrl, callbackActive) {
+    document.getElementById('editCamId').value = id;
+    document.getElementById('editCamName').value = name;
+    document.getElementById('editCamSource').value = source;
+    document.getElementById('editCamCallback').value = callbackUrl || '';
+    document.getElementById('editCamCallbackActive').checked = callbackActive === 'true';
+    new bootstrap.Modal(document.getElementById('editCameraModal')).show();
+}
 </script>
 {% endblock %}

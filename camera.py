@@ -87,6 +87,25 @@ class CameraManager:
             "callback_active": callback_active,
         }
 
+    def update_camera(self, cam_id: str, name: str, source, cam_type: str,
+                      resolution: str = '', callback_url: str = '',
+                      callback_active: str = 'false'):
+        """Actualiza una camara en memoria."""
+        if cam_id not in self.cameras:
+            return False
+        self.release_capture(cam_id)
+        self.cameras[cam_id] = {
+            "id": cam_id,
+            "type": cam_type,
+            "source": int(source) if cam_type == "usb" else source,
+            "name": name,
+            "slug": self.cameras[cam_id].get("slug", ""),
+            "resolution": resolution,
+            "callback_url": callback_url,
+            "callback_active": callback_active,
+        }
+        return True
+
     def remove_camera(self, cam_id: str):
         """Elimina una camara del gestor."""
         self.release_capture(cam_id)
