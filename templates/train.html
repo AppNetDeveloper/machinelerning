@@ -7,6 +7,102 @@
     <p>Configura y ejecuta el entrenamiento de EfficientNet-B0</p>
 </div>
 
+<!-- Dataset Stats -->
+<div class="row g-4 mb-4">
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <i class="bi bi-images" style="font-size: 2rem; color: var(--accent);"></i>
+                <h3 class="mt-2 mb-0">{{ dataset_stats.total_images }}</h3>
+                <small class="text-muted">Imagenes totales</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <i class="bi bi-folder" style="font-size: 2rem; color: var(--accent);"></i>
+                <h3 class="mt-2 mb-0">{{ dataset_stats.num_classes }}</h3>
+                <small class="text-muted">Clases</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <i class="bi bi-hdd" style="font-size: 2rem; color: var(--accent);"></i>
+                <h3 class="mt-2 mb-0">{{ dataset_stats.total_size_mb }} MB</h3>
+                <small class="text-muted">Tamano total</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <i class="bi bi-bar-chart" style="font-size: 2rem; color: var(--accent);"></i>
+                <h3 class="mt-2 mb-0">
+                    {% if dataset_stats.num_classes > 0 %}
+                        {{ (dataset_stats.total_images / dataset_stats.num_classes)|round|int }}
+                    {% else %}
+                        0
+                    {% endif %}
+                </h3>
+                <small class="text-muted">Promedio por clase</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if dataset_chart %}
+<div class="card mb-4">
+    <div class="card-header"><i class="bi bi-graph-up"></i> Distribucion del Dataset</div>
+    <div class="card-body text-center">
+        <img src="data:image/png;base64,{{ dataset_chart }}"
+             alt="Distribucion del dataset"
+             style="max-width: 100%; height: auto;">
+    </div>
+</div>
+{% endif %}
+
+{% if dataset_stats.classes %}
+<div class="card mb-4">
+    <div class="card-header"><i class="bi bi-table"></i> Detalle por Clase</div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-dark table-sm table-hover">
+                <thead>
+                    <tr>
+                        <th>Clase</th>
+                        <th class="text-end">Imagenes</th>
+                        <th class="text-end">Tamano</th>
+                        <th class="text-end">% del Total</th>
+                        <th>Barra</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for class_name, info in dataset_stats.classes.items() %}
+                    <tr>
+                        <td><strong>{{ class_name }}</strong></td>
+                        <td class="text-end">{{ info.count }}</td>
+                        <td class="text-end">{{ "%.1f"|format(info.size_bytes / (1024*1024)) }} MB</td>
+                        <td class="text-end">{{ "%.1f"|format(info.count / dataset_stats.total_images * 100) }}%</td>
+                        <td style="width: 30%;">
+                            <div class="progress" style="height: 20px;">
+                                <div class="progress-bar bg-accent" role="progressbar"
+                                     style="width: {{ (info.count / dataset_stats.total_images * 100) }}%">
+                                    {{ info.count }}
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <div class="row g-4">
     <!-- Control panel -->
     <div class="col-md-4">

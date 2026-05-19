@@ -2,9 +2,16 @@
 
 import json
 import asyncio
+import base64
+from io import BytesIO
+from pathlib import Path
+from datetime import datetime
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 from config import (
     DATASET_DIR, MODEL_PATH, TEMPLATES_DIR,
@@ -14,6 +21,65 @@ from config import (
 from database import save_training_run
 from auth import get_current_user
 from ml_model import model_manager
+
+
+def get_dataset_stats():
+    """Obtiene estadisticas del dataset: clases, conteos, total, tamano."""
+    stats = {}
+    total_images = 0
+    total_size = 0
+    extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif'}
+
+    if not DATASET_DIR.exists():
+        return {"classes": stats, "total_images": 0, "total_size_mb": 0, "num_classes": 0}
+
+    for class_dir in sorted(DATASET_DIR.iterdir()):
+        if not class_dir.is_dir():
+            continue
+        images = [f for f in class_dir.iterdir()
+                  if f.is_file() and f.suffix.lower() in extensions]
+        count = len(images)
+        size = sum(f.stat().st_size for f in images)
+        stats[class_dir.name] = {"count": count, "size_bytes": size}
+        total_images += count
+        total_size += size
+
+    return {
+        "classes": stats,
+        "total_images": total_images,
+        "total_size_mb": round(total_size / (1024 * 1024), 1),
+        "num_classes": len(stats),
+    }
+
+
+def generate_dataset_chart(stats):
+    """Genera grafica de barras del dataset y retorna base64 PNG."""
+    if not stats["classes"]:
+        return None
+
+    classes = list(stats["classes"].keys())
+    counts = [stats["classes"][c]["count"] for c in classes]
+
+    fig, ax = plt.subplots(figsize=(8, max(3, len(classes) * 0.6)))
+    colors = plt.cm.viridis([i / len(classes) for i in range(len(classes))])
+    bars = ax.barh(classes, counts, color=colors, height=0.6)
+    ax.set_xlabel("Numero de imagenes", fontsize=11)
+    ax.set_title(f"Distribucion del Dataset ({stats['total_images']} imagenes, {stats['num_classes']} clases)",
+                 fontsize=12, fontweight="bold")
+    ax.invert_yaxis()
+
+    for bar, count in zip(bars, counts):
+        ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height()/2,
+                str(count), va='center', fontsize=10)
+
+    ax.set_xlim(0, max(counts) * 1.2 if counts else 10)
+    plt.tight_layout()
+
+    buf = BytesIO()
+    plt.savefig(buf, format='png', dpi=120, bbox_inches='tight')
+    plt.close()
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode('utf-8')
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -43,11 +109,16 @@ async def train_page(request: Request):
     if not user:
         return RedirectResponse("/login", status_code=303)
 
+    dataset_stats = get_dataset_stats()
+    dataset_chart = generate_dataset_chart(dataset_stats)
+
     return templates.TemplateResponse(request, "train.html", {
         "request": request,
         "user": user,
         "training_state": training_state,
         "model_loaded": model_manager.is_loaded,
+        "dataset_stats": dataset_stats,
+        "dataset_chart": dataset_chart,
         "cfg_epochs_head": EPOCHS_HEAD,
         "cfg_epochs_finetune": EPOCHS_FINETUNE,
         "cfg_lr_head": LR_HEAD,
