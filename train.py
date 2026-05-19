@@ -29,6 +29,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# Desactivar DNNL para evitar errores bf16/f16 en CPUs con avx2_vnni_2
+os.environ["ONEDNN_MAX_CPU_ISA"] = "AVX2"
+
 import numpy as np
 from config import (
     DATASET_DIR, MODEL_PATH, CLASES_PATH, IMG_SIZE, BATCH_SIZE,
@@ -336,7 +339,11 @@ def run_training_sync(progress_callback=None):
         print(msg)
         return True
 
+    # AMP solo en CUDA; en CPU forzar float32 puro
     use_amp = USE_AMP and device.type == "cuda"
+    if device.type == "cpu":
+        # Desactivar optimizaciones DNNL que causan errores bf16/f16
+        torch.backends.mkldnn.enabled = False
     scaler = torch.amp.GradScaler(enabled=use_amp)
     report(f"Usando dispositivo: {device} | AMP: {'activo' if use_amp else 'inactivo (CPU)'}", phase="init")
 
